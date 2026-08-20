@@ -1,0 +1,140 @@
+{
+  "_说明": "monitors 里按资产写阈值，每条阈值会自动展开成一条独立报警规则；rules 里可以写更复杂的组合规则（可留空）",
+  "intervalSeconds": 300,
+  "defaultCooldownMinutes": 60,
+  "telegram": {
+    "_说明": "mode=digest 时一轮检查的所有报警合并成一条消息（按池子分组）；single 则每条报警各发一条。fields 控制推送里包含哪些行，跑 `node aave/index.js fields` 看全部可用值，`preview` 看渲染效果",
+    "mode": "digest",
+    "digestIncludeOthers": true,
+    "digestLayout": "overview+detail",
+    "digestDedupeFields": true,
+    "fields": [
+      "supplyAPY",
+      "reserveSize",
+      "availableLiquidity",
+      "utilizationRate",
+      "supplyCap",
+      "borrowLine",
+      "riskParams",
+      "status"
+    ],
+    "heartbeatFields": [
+      "supplyAPY",
+      "utilizationRate",
+      "reserveSizeUsd",
+      "availableLiquidityUsd"
+    ],
+    "showRuleId": true,
+    "showAaveLink": true,
+    "showTimestamp": true,
+    "silentSeverities": [
+      "info"
+    ],
+    "notifyOnRecover": true,
+    "quietHours": {
+      "enabled": false,
+      "start": 1,
+      "end": 7,
+      "timezone": "Asia/Shanghai",
+      "exceptSeverities": [
+        "critical"
+      ]
+    },
+    "rateLimit": {
+      "maxPerHour": 20,
+      "exceptSeverities": [
+        "critical"
+      ]
+    }
+  },
+  "heartbeatHours": 0,
+  "statePath": "aave/data/state.json",
+  "historyIntervalMinutes": 60,
+  "mongo": {
+    "_说明": "MONGODB_URI 走 .env / GitHub Secrets（含密码）。tiers 是降采样层级：粒度越粗留得越久，TTL 到期由 MongoDB 自动删除。stats=true 的层额外记录桶内 min/max",
+    "db": "aave",
+    "tiers": [
+      {
+        "collection": "aave_5m",
+        "intervalMinutes": 5,
+        "ttlDays": 90
+      },
+      {
+        "collection": "aave_1h",
+        "intervalMinutes": 60,
+        "ttlDays": 1095,
+        "stats": true
+      }
+    ]
+  },
+  "rpcUrls": [
+    "https://ethereum-rpc.publicnode.com",
+    "https://eth.drpc.org"
+  ],
+  "monitors": [
+    {
+      "symbol": "USDT",
+      "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+      "alerts": {
+        "supplyAPY": {
+          "op": ">=",
+          "value": 5,
+          "severity": "info"
+        },
+        "utilizationRate": {
+          "op": ">=",
+          "value": 95,
+          "severity": "critical"
+        },
+        "availableLiquidityUsd": {
+          "op": "<",
+          "value": 200000000,
+          "severity": "critical"
+        }
+      }
+    },
+    {
+      "symbol": "USDC",
+      "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+      "alerts": {
+        "supplyAPY": {
+          "op": ">=",
+          "value": 5,
+          "severity": "info"
+        },
+        "utilizationRate": {
+          "op": ">=",
+          "value": 95,
+          "severity": "critical"
+        },
+        "availableLiquidityUsd": {
+          "op": "<",
+          "value": 100000000,
+          "severity": "critical"
+        }
+      }
+    },
+    {
+      "symbol": "WETH",
+      "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+      "alerts": {
+        "supplyAPY": {
+          "op": ">=",
+          "value": 5,
+          "severity": "info"
+        },
+        "utilizationRate": {
+          "op": ">=",
+          "value": 85,
+          "severity": "critical"
+        },
+        "availableLiquidityUsd": {
+          "op": "<",
+          "value": 300000000,
+          "severity": "critical"
+        }
+      }
+    }
+  ],
+  "rules": []
+}

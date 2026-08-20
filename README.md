@@ -460,4 +460,4 @@ tg.escapeHtml(userInput);   // HTML 模式必须转义
 ## 注意
 
 - 删掉 `aave/data/state.json` 即重置：变化类规则会跳过一个周期，已触发的规则会重新报一次
-- `aave/config.json` 和 `.env` 已在 `.gitignore` 里，改阈值不会污染仓库
+- `.env` 在 `.gitignore` 里，凭据不会进仓库；`aave/config.json` 已版本化，改阈值会产生 git 变更
