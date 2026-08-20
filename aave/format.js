@@ -107,12 +107,11 @@ function compactLine(r, tg, icon = '', prev = null) {
     const pct = prev[k] !== 0 ? Math.abs(d / prev[k]) * 100 : 0;
     const shown = fmtNum(k, Math.abs(d));
     // 变化小到显示不出来（格式化后和 0 一样）或相对幅度不足 0.01%，
-    // 就当没变 —— 否则会出现「🔴▼0.00%」这种自相矛盾的显示
-    if (shown === fmtNum(k, 0) || pct < 0.01) return ' ⚪️→';
-    // 百分比同理：toFixed(1) 后是 0.0 就别显示，只留绝对量
-    const pctStr = pct.toFixed(1);
-    const amt = `${shown}${pctStr !== '0.0' ? `/${pctStr}%` : ''}`;
-    return d > 0 ? ` 🟢▲${amt}` : ` 🔴▼${amt}`;
+    // 就整个不显示 —— 一行里挤满 ⚪️→ 只是噪音，留白反而清楚
+    if (shown === fmtNum(k, 0) || pct < 0.01) return '';
+    // 百分比精度自适应：大变化留一位够了，小变化要两位才看得出来
+    const pctStr = pct >= 1 ? pct.toFixed(1) : pct.toFixed(2);
+    return `${d > 0 ? ' 🟢▲' : ' 🔴▼'}${shown}/${pctStr}%`;
   };
   // symbol 补齐到 5 字符，多资产时概览区仍能对齐。
   // 必须用 U+00A0 字符本身，不能用 &nbsp; 实体 —— Telegram 的 HTML 模式只认
