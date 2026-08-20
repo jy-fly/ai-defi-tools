@@ -10,6 +10,7 @@ const CMP = {
 
 const OP_LABEL = {
   '>': '>', '>=': '≥', '<': '<', '<=': '≤', '==': '=', '!=': '≠',
+  dropPctOver: '窗口内跌幅超过', risePctOver: '窗口内涨幅超过',
   changeUp: '单次上涨超过', changeDown: '单次下跌超过', changeAbs: '单次变动超过',
   changePctUp: '单次涨幅超过', changePctDown: '单次跌幅超过', changePct: '单次波动超过',
   crossUp: '上穿', crossDown: '下穿',
@@ -41,7 +42,32 @@ export function fmtNum(metric, v) {
   return v.toFixed(abs < 1 ? 4 : 2);
 }
 
-function evalCondition(cond, cur, prev) {
+
+/** 从滑动窗口历史里取「windowMinutes 之前」的值。
+ *  取时间戳 <= 目标时刻的最新一点；偏差超过一个窗口长度就算数据不足，
+ *  避免历史稀疏时拿一个很老的点做对比、误报。 */
+function lookback(history, symbol, metric, windowMinutes, nowTs) {
+  if (!Array.isArray(history) || !history.length) return { ok: false, reason: '暂无历史数据' };
+  const target = nowTs - windowMinutes * 60_000;
+  let found = null;
+  for (const p of history) {
+    if (p.t <= target && (!found || p.t > found.t)) found = p;
+  }
+  if (!found) {
+    const oldest = Math.min(...history.map((p) => p.t));
+    const haveMin = Math.round((nowTs - oldest) / 60_000);
+    return { ok: false, reason: `历史不足 ${windowMinutes} 分钟（目前只有 ${haveMin} 分钟）` };
+  }
+  if (target - found.t > windowMinutes * 60_000) {
+    const age = Math.round((nowTs - found.t) / 60_000);
+    return { ok: false, reason: `最近的历史点是 ${age} 分钟前，偏离 ${windowMinutes} 分钟窗口太多` };
+  }
+  const v = found.d?.[symbol]?.[metric];
+  if (typeof v !== 'number') return { ok: false, reason: `历史里没有 ${symbol}.${metric}` };
+  return { ok: true, value: v, at: found.t, ageMinutes: Math.round((nowTs - found.t) / 60_000) };
+}
+
+function evalCondition(cond, cur, prev, ctx = {}) {
   const { metric, op, value } = cond;
   const now = cur[metric];
   const before = prev ? prev[metric] : undefined;
@@ -57,6 +83,23 @@ function evalCondition(cond, cur, prev) {
     `${metric} ${OP_LABEL[op] ?? op} ${valueText}（当前 ${fmtNum(metric, now)}${extra}）`;
 
   if (CMP[op]) return { pass: CMP[op](now, value), detail: detail() };
+
+  // 窗口类：和 windowMinutes 分钟前的历史值比，而不是和上一次快照比
+  if (op === 'dropPctOver' || op === 'risePctOver') {
+    const win = cond.windowMinutes;
+    if (!win) return { pass: false, detail: `${metric} ${op} 缺少 windowMinutes` };
+    const past = lookback(ctx.history, ctx.symbol, metric, win, ctx.nowTs ?? Date.now());
+    if (!past.ok) return { pass: false, detail: `${metric} ${win} 分钟窗口：${past.reason}` };
+    if (past.value === 0) return { pass: false, detail: `${metric} ${win} 分钟前为 0，无法算百分比` };
+
+    const pct = ((now - past.value) / Math.abs(past.value)) * 100;
+    const moved = op === 'dropPctOver' ? -pct : pct;
+    const label = op === 'dropPctOver' ? '跌幅' : '涨幅';
+    const text = `${metric} ${win} 分钟内${label} ${moved >= 0 ? moved.toFixed(2) : '(反向)' + Math.abs(moved).toFixed(2)}%`
+      + `（阈值 ${Number(value).toFixed(2)}%，${win} 分钟前 ${fmtNum(metric, past.value)} → 现在 ${fmtNum(metric, now)}`
+      + `${past.ageMinutes !== win ? `，实际回看 ${past.ageMinutes} 分钟` : ''}）`;
+    return { pass: moved >= value, detail: text };
+  }
 
   // 变化类条件需要上一次快照
   if (before === undefined || typeof now !== 'number' || typeof before !== 'number') {
@@ -87,7 +130,7 @@ function renderTemplate(tpl, r) {
  * 评估全部规则
  * @returns {Array<{key:string, ruleId:string, symbol:string, severity:string, title:string, details:string[], firing:boolean, rule:object, reserve:object}>}
  */
-export function evaluateRules(rules, snapshot, prevSnapshot) {
+export function evaluateRules(rules, snapshot, prevSnapshot, history = []) {
   const out = [];
   for (const rule of rules) {
     if (rule.enabled === false) continue;
@@ -96,7 +139,8 @@ export function evaluateRules(rules, snapshot, prevSnapshot) {
       const cur = snapshot.reserves[symbol];
       if (!cur) continue;
       const prev = prevSnapshot?.reserves?.[symbol];
-      const results = (rule.when || []).map((c) => evalCondition(c, cur, prev));
+      const ctx = { history, symbol, nowTs: snapshot.ts };
+      const results = (rule.when || []).map((c) => evalCondition(c, cur, prev, ctx));
       if (!results.length) continue;
       const firing = rule.any ? results.some((r) => r.pass) : results.every((r) => r.pass);
       out.push({

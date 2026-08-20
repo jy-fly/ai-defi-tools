@@ -272,6 +272,25 @@ node aave/index.js preview USDC    # 按当前真实数据渲染 single 和 dige
 
 确认好了再 `node aave/index.js preview USDC --send` 真发一条看手机上的效果。
 
+
+### 每日定时推送
+
+```json
+"dailyReport": { "enabled": true, "hour": 10, "minute": 0, "timezone": "Asia/Shanghai" }
+```
+
+每天早上 10 点推一份三池状态，带涨跌对比。
+
+**刻意不做「精确到点触发」**：GitHub cron 会抖动十几分钟甚至跳过整轮，如果要求「10:00 那一轮」才发，很可能整天都不发。所以判定逻辑是「今天过了 10:00、且今天还没发过」—— 哪怕上午全漏了，14:45 第一次跑到也会补发当天这一份。日期按配置时区计算，记在 `state.lastDailyReport`。
+
+涨跌用 emoji 上色（**Telegram 的 HTML 不支持自定义颜色**，只有 bold/italic/code/spoiler 这些，emoji 是唯一手段），沿用 crypto 惯例涨绿跌红：
+
+```
+USDT   存款 APY 3.06% 🟢▲0.04%/1.3% ｜ 可用流动性 $357.20M 🔴▼$14.80M/4.0%
+USDC   存款 APY 4.25% 🔴▼0.35%/7.6% ｜ 可用流动性 $157.00M 🔴▼$11.00M/6.5%
+WETH   存款 APY 1.47% ⚪️→ ｜ 可用流动性 $959.50M ⚪️→
+```
+
 ### 3) 推送时机和频率
 
 ```json

@@ -7,6 +7,13 @@
     "mode": "digest",
     "digestIncludeOthers": true,
     "alwaysSend": false,
+    "dailyReport": {
+      "_说明": "每天固定时间推一份状态。不是精确定时触发，而是「过了该时刻后第一次运行就发」—— GitHub cron 会抖动，这样才不会漏",
+      "enabled": true,
+      "hour": 10,
+      "minute": 0,
+      "timezone": "Asia/Shanghai"
+    },
     "digestLayout": "overview+detail",
     "digestDedupeFields": true,
     "fields": [
@@ -137,5 +144,66 @@
       }
     }
   ],
-  "rules": []
+  "rules": [
+    {
+      "id": "liq-drop-5m",
+      "severity": "critical",
+      "assets": "*",
+      "when": [
+        {
+          "metric": "availableLiquidityUsd",
+          "op": "dropPctOver",
+          "value": 5,
+          "windowMinutes": 5
+        }
+      ],
+      "cooldownMinutes": 15,
+      "message": "{symbol} 可用流动性 5 分钟内急跌 → 现为 {availableLiquidityUsd}"
+    },
+    {
+      "id": "liq-drop-10m",
+      "severity": "critical",
+      "assets": "*",
+      "when": [
+        {
+          "metric": "availableLiquidityUsd",
+          "op": "dropPctOver",
+          "value": 10,
+          "windowMinutes": 10
+        }
+      ],
+      "cooldownMinutes": 30,
+      "message": "{symbol} 可用流动性 10 分钟内下跌超 10% → 现为 {availableLiquidityUsd}"
+    },
+    {
+      "id": "liq-drop-60m",
+      "severity": "critical",
+      "assets": "*",
+      "when": [
+        {
+          "metric": "availableLiquidityUsd",
+          "op": "dropPctOver",
+          "value": 20,
+          "windowMinutes": 60
+        }
+      ],
+      "cooldownMinutes": 60,
+      "message": "{symbol} 可用流动性 1 小时内下跌超 20% → 现为 {availableLiquidityUsd}"
+    },
+    {
+      "id": "liq-drop-1d",
+      "severity": "critical",
+      "assets": "*",
+      "when": [
+        {
+          "metric": "availableLiquidityUsd",
+          "op": "dropPctOver",
+          "value": 50,
+          "windowMinutes": 1440
+        }
+      ],
+      "cooldownMinutes": 180,
+      "message": "{symbol} 可用流动性 24 小时内腰斩 → 现为 {availableLiquidityUsd}"
+    }
+  ]
 }

@@ -58,6 +58,37 @@ function requireTg() {
 
 const snapshotNow = (cfg) => fetchReserves(makeClient(rpcList(cfg)), cfg.assets);
 
+
+// 供窗口类规则回看的指标。只存这几个，288 个点(1天)约 60KB，
+// 放在 Actions cache 里没问题；存全字段会膨胀好几倍。
+const HISTORY_METRICS = ['availableLiquidityUsd', 'utilizationRate', 'reserveSizeUsd', 'supplyAPY'];
+
+/** 追加当前快照到滑动窗口，并裁掉超出最长窗口需求的旧点 */
+function pushHistory(state, snapshot, rules) {
+  const windows = rules.flatMap((r) => (r.when || []).map((c) => c.windowMinutes || 0));
+  const maxWindow = Math.max(0, ...windows);
+  if (!maxWindow) return;                       // 没有窗口类规则就不用留历史
+
+  const d = {};
+  for (const r of Object.values(snapshot.reserves)) {
+    const m = {};
+    for (const k of HISTORY_METRICS) {
+      const v = r[k];
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        // 大额取整、百分比留两位，省体积
+        m[k] = k.endsWith('Usd') ? Math.round(v) : Math.round(v * 100) / 100;
+      }
+    }
+    d[r.symbol] = m;
+  }
+  state.history.push({ t: snapshot.ts, d });
+
+  // 多留 20% 余量，避免 cron 抖动时刚好差一点导致窗口规则失效
+  const keepMs = maxWindow * 60_000 * 1.2;
+  const cutoff = snapshot.ts - keepMs;
+  state.history = state.history.filter((p) => p.t >= cutoff);
+}
+
 /** 当前是否处于静默时段（支持跨午夜，如 23 点到次日 7 点） */
 function inQuietHours(q, at = new Date()) {
   if (!q || q.enabled === false || q.start === undefined || q.end === undefined) return false;
@@ -67,6 +98,29 @@ function inQuietHours(q, at = new Date()) {
     }).format(at)
   ) % 24;
   return q.start <= q.end ? hour >= q.start && hour < q.end : hour >= q.start || hour < q.end;
+}
+
+
+/** 每天固定时刻推一份状态。
+ *  刻意不做「精确到点触发」—— GitHub cron 会抖动十几分钟甚至跳过整轮，
+ *  所以判定改成「今天过了该时刻、且今天还没发过」，第一次跑到就补发。 */
+function dueDailyReport(cfg, state, nowMs) {
+  const d = cfg?.dailyReport;
+  if (!d || d.enabled === false) return null;
+  const tz = d.timezone || 'Asia/Shanghai';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(new Date(nowMs)).reduce((a, p) => (a[p.type] = p.value, a), {});
+
+  const today = `${parts.year}-${parts.month}-${parts.day}`;
+  if (state.lastDailyReport === today) return null;          // 今天已经发过
+
+  const nowMin = Number(parts.hour) % 24 * 60 + Number(parts.minute);
+  const dueMin = (d.hour ?? 10) * 60 + (d.minute ?? 0);
+  if (nowMin < dueMin) return null;                          // 还没到点
+
+  return { date: today, tz, at: `${String(d.hour ?? 10).padStart(2,'0')}:${String(d.minute ?? 0).padStart(2,'0')}` };
 }
 
 /** 推送前的闸门：静默时段 / 每小时条数上限。返回 null 表示放行，否则返回拦截原因 */
@@ -93,7 +147,7 @@ async function runOnce(cfg, { notify = true, quiet = false, historyPath = null }
   const snapshot = await snapshotNow(cfg);
   if (!quiet) printTable(snapshot);
 
-  const events = evaluateRules(cfg.rules, snapshot, state.lastSnapshot);
+  const events = evaluateRules(cfg.rules, snapshot, state.lastSnapshot, state.history);
   const now = Date.now();
   state.sentLog = (state.sentLog || []).filter((t) => now - t < 3_600_000);
   const outbox = [];
@@ -210,6 +264,23 @@ async function runOnce(cfg, { notify = true, quiet = false, historyPath = null }
     }
   }
 
+  // 每日定时状态推送
+  const daily = notify && configured ? dueDailyReport(tgCfg, state, now) : null;
+  if (daily) {
+    try {
+      await send(
+        summaryMessage(snapshot, state.lastSnapshot, `☀️ Aave V3 每日状态 · ${daily.date}`, tgCfg),
+        { silent: false }
+      );
+      state.lastDailyReport = daily.date;
+      sent++;
+      state.sentLog.push(now);
+      console.log(`[sent] 每日状态推送（${daily.date} ${daily.at} ${daily.tz}）`);
+    } catch (e) {
+      console.error(`[telegram] 每日推送失败: ${e.message}`);
+    }
+  }
+
   if (heartbeat && notify && configured) {
     try {
       await send(summaryMessage(snapshot, state.lastSnapshot, '📊 Aave V3 定时快照', tgCfg), { silent: true });
@@ -250,6 +321,7 @@ async function runOnce(cfg, { notify = true, quiet = false, historyPath = null }
     }
   }
 
+  pushHistory(state, snapshot, cfg.rules);
   state.lastSnapshot = snapshot;
   saveState(statePath, state);
   return { snapshot, events, sent };
@@ -267,6 +339,10 @@ function printTgConfig(cfg) {
   console.log(`快照字段    : ${(t.heartbeatFields || []).join(', ')}`);
   console.log(`静音级别    : ${(t.silentSeverities || []).join(', ') || '（无）'}`);
   if (t.alwaysSend) console.log('⚠️ alwaysSend  : 开启 —— 每轮无论有无报警都推送（测试用，上线记得关）');
+  const d = t.dailyReport;
+  console.log(`每日推送    : ${d && d.enabled !== false
+    ? `每天 ${String(d.hour ?? 10).padStart(2,'0')}:${String(d.minute ?? 0).padStart(2,'0')} ${d.timezone || 'Asia/Shanghai'}（过点后第一次运行补发）`
+    : '关闭'}`);
   console.log(`Aave 链接   : ${t.showAaveLink ? '显示' : '隐藏'} ｜ 区块时间: ${t.showTimestamp ? '显示' : '隐藏'} ｜ 规则 ID: ${t.showRuleId ? '显示' : '隐藏'}`);
   const q = t.quietHours;
   console.log(`静默时段    : ${q && q.enabled !== false && q.start !== undefined

@@ -99,11 +99,15 @@ function compactLine(r, tg, icon = '', prev = null) {
   const name = tg.showAaveLink
     ? `<a href="${aaveUrl(r.address)}">${escapeHtml(r.symbol)}</a>`
     : escapeHtml(r.symbol);
+  // Telegram 的 HTML 不支持 color，只能用 emoji 上色。
+  // 沿用 crypto/美股惯例：涨绿跌红。
   const arrow = (k) => {
     if (!prev || typeof prev[k] !== 'number') return '';
     const d = r[k] - prev[k];
-    if (Math.abs(d) < 1e-9) return ' →';
-    return d > 0 ? ` ↑${fmtNum(k, Math.abs(d))}` : ` ↓${fmtNum(k, Math.abs(d))}`;
+    if (Math.abs(d) < 1e-9) return ' ⚪️→';
+    const pct = prev[k] !== 0 ? Math.abs(d / prev[k]) * 100 : 0;
+    const amt = `${fmtNum(k, Math.abs(d))}${pct >= 0.01 ? `/${pct.toFixed(1)}%` : ''}`;
+    return d > 0 ? ` 🟢▲${amt}` : ` 🔴▼${amt}`;
   };
   // symbol 补齐到 5 字符，多资产时概览区仍能对齐。
   // 必须用 U+00A0 字符本身，不能用 &nbsp; 实体 —— Telegram 的 HTML 模式只认
