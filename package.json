@@ -1,0 +1,22 @@
+{
+  "name": "ai-defi-tools",
+  "version": "1.0.0",
+  "description": "DeFi 监控工具集：aave/ 为 Aave V3 池子监控，tg/ 为通用 Telegram 推送模块",
+  "type": "module",
+  "scripts": {
+    "check": "./aave/monitor check",
+    "show": "./aave/monitor show",
+    "preview": "./aave/monitor preview",
+    "fields": "./aave/monitor fields",
+    "once": "./aave/monitor once",
+    "watch": "./aave/monitor watch",
+    "test-tg": "./aave/monitor test-tg",
+    "chat-id": "./aave/monitor chat-id"
+  },
+  "dependencies": {
+    "viem": "^2.21.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
