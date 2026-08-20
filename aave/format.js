@@ -104,9 +104,14 @@ function compactLine(r, tg, icon = '', prev = null) {
   const arrow = (k) => {
     if (!prev || typeof prev[k] !== 'number') return '';
     const d = r[k] - prev[k];
-    if (Math.abs(d) < 1e-9) return ' ⚪️→';
     const pct = prev[k] !== 0 ? Math.abs(d / prev[k]) * 100 : 0;
-    const amt = `${fmtNum(k, Math.abs(d))}${pct >= 0.01 ? `/${pct.toFixed(1)}%` : ''}`;
+    const shown = fmtNum(k, Math.abs(d));
+    // 变化小到显示不出来（格式化后和 0 一样）或相对幅度不足 0.01%，
+    // 就当没变 —— 否则会出现「🔴▼0.00%」这种自相矛盾的显示
+    if (shown === fmtNum(k, 0) || pct < 0.01) return ' ⚪️→';
+    // 百分比同理：toFixed(1) 后是 0.0 就别显示，只留绝对量
+    const pctStr = pct.toFixed(1);
+    const amt = `${shown}${pctStr !== '0.0' ? `/${pctStr}%` : ''}`;
     return d > 0 ? ` 🟢▲${amt}` : ` 🔴▼${amt}`;
   };
   // symbol 补齐到 5 字符，多资产时概览区仍能对齐。
