@@ -40,6 +40,22 @@ const creds = () => ({ token: aaveToken(), chatId: aaveChat() });
 const send = (text, opts = {}) => tg.sendMessage(text, { ...creds(), ...opts });
 const tgReady = () => tg.isConfigured(creds());
 
+/** 需要真发消息的命令用它先卡一道，把「到底该配哪个变量」讲清楚 */
+function requireTg() {
+  if (tgReady()) return;
+  const seen = (k) => (process.env[k] ? '✅ 有值' : '— 空');
+  throw new Error(
+    'Telegram 凭据没读到。当前环境变量：\n'
+    + `  AAVE_TELEGRAM_BOT_TOKEN  ${seen('AAVE_TELEGRAM_BOT_TOKEN')}\n`
+    + `  AAVE_TELEGRAM_CHAT_ID    ${seen('AAVE_TELEGRAM_CHAT_ID')}\n`
+    + `  TELEGRAM_BOT_TOKEN       ${seen('TELEGRAM_BOT_TOKEN')}   （兜底）\n`
+    + `  TELEGRAM_CHAT_ID         ${seen('TELEGRAM_CHAT_ID')}   （兜底）\n`
+    + '  优先级 AAVE_TELEGRAM_* > TELEGRAM_*，两组都空就是这个错。\n'
+    + '  本地：填 .env。GitHub Actions：Settings → Secrets and variables → Actions，\n'
+    + '  Secret 名字必须是 AAVE_TELEGRAM_BOT_TOKEN / AAVE_TELEGRAM_CHAT_ID（大小写和前缀都要一致）。'
+  );
+}
+
 const snapshotNow = (cfg) => fetchReserves(makeClient(rpcList(cfg)), cfg.assets);
 
 /** 当前是否处于静默时段（支持跨午夜，如 23 点到次日 7 点） */
@@ -335,7 +351,7 @@ try {
       : summaryMessage(snap, null, isTest ? '🔔 Aave V3 监控连通性测试' : '📊 Aave V3 当前状态', t);
     console.log(stripHtml(text));
     if (flags.has('--dry-run')) { console.log('\n[dry-run] 未发送'); }
-    else { await send(text, { silent: flags.has('--silent') }); console.log('\n[ok] 已发送到 Telegram'); }
+    else { requireTg(); await send(text, { silent: flags.has('--silent') }); console.log('\n[ok] 已发送到 Telegram'); }
   } else if (cmd === 'chat-id') {
     const ids = await tg.getChatIds(aaveToken());
     if (!ids.length) console.log('没抓到会话，先把 bot 拉进群或私聊发一条消息再试');

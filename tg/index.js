@@ -47,7 +47,9 @@ export function isConfigured(override) {
  */
 export async function sendMessage(text, opts = {}) {
   const { token, chatId } = creds(opts);
-  if (!token || !chatId) throw new Error('缺少 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID');
+  if (!token || !chatId) {
+    throw new Error(`缺少 Telegram 凭据（token=${token ? '有' : '空'} chatId=${chatId ? '有' : '空'}）`);
+  }
 
   const retries = opts.retries ?? 2;
   let lastErr;
@@ -90,7 +92,7 @@ export function escapeHtml(s) {
 
 /** 拉取 chat_id：把 bot 加进群或私聊发一条消息后调用 */
 export async function getChatIds(token = process.env.TELEGRAM_BOT_TOKEN) {
-  if (!token) throw new Error('缺少 TELEGRAM_BOT_TOKEN');
+  if (!token) throw new Error('缺少 Telegram bot token');
   let res;
   try {
     res = await fetch(`${API}/bot${token}/getUpdates`, { signal: AbortSignal.timeout(15_000) });
