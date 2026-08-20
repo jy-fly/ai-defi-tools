@@ -13,6 +13,8 @@ ai-defi-tools/
 │   ├── index.js            # CLI 入口
 │   ├── reserves.js         # 链上数据抓取
 │   ├── rules.js            # 规则引擎
+│   ├── history.js          # CSV 落库
+│   ├── mongo.js            # MongoDB 落库
 │   ├── config.js           # 配置加载 + 阈值展开成规则
 │   ├── format.js           # 消息 / 表格渲染
 │   ├── state.js            # 上次快照 + 报警去重状态
@@ -118,6 +120,7 @@ node aave/index.js chat-id            # 列出 bot 能看到的 chat_id
 | `AAVE_TELEGRAM_CHAT_ID` | aave 专属 | Aave 报警发到哪个群 |
 | `TELEGRAM_BOT_TOKEN` | `tg/` 兜底 | **可选**。多个协议想共用一个 bot 时设这个 |
 | `TELEGRAM_CHAT_ID` | `tg/` 兜底 | **可选**。共用同一个群时设这个 |
+| `MONGODB_URI` | 可选 | MongoDB 连接串，含密码所以只走环境变量/Secrets。不设则不写 mongo |
 | `ETH_RPC_URLS` | 按链 | 以太坊主网 RPC，逗号分隔按序故障转移。同链上的其他协议共用 |
 | `HTTPS_PROXY` / `NODE_USE_ENV_PROXY` | 环境 | 见「国内网络」一节 |
 
@@ -287,6 +290,54 @@ node aave/index.js preview USDC    # 按当前真实数据渲染 single 和 dige
 
 ```bash
 node aave/index.js check
+```
+
+## 历史数据
+
+报警只看当下，趋势要靠存下来。两个后端可以单独开也可以同时开，**都放在报警之后执行，任何一个挂了都不影响推送**，而且复用报警那次的 RPC 抓取，不额外发请求。
+
+默认每小时落一次（`historyIntervalMinutes`），报警仍是每 5 分钟检查。
+
+### CSV（零依赖，推荐先用这个）
+
+```bash
+./aave/monitor once --history=data/history.csv
+```
+
+14 列，每个池子一行：`timestamp,block,symbol,priceUsd,supplyAPY,borrowAPY,utilizationRate,reserveSize,reserveSizeUsd,availableLiquidity,availableLiquidityUsd,totalDebt,totalDebtUsd,supplyCapUsedPct`
+
+写入间隔靠**读 CSV 最后一行的时间戳**判断，不依赖状态文件 —— 天然幂等，CI 上 cache 丢了也不会重复写。
+
+一年不到 2MB。查起来一条 SQL：
+
+```bash
+duckdb -c "SELECT symbol, min(availableLiquidityUsd) AS 最低流动性, max(utilizationRate) AS 最高利用率 FROM 'history.csv' GROUP BY symbol"
+```
+
+GitHub Actions 里数据存在独立的 `data` 分支，每次 force push 单个 commit —— CSV 内容持续累积，但 git 历史永远只有一条，不会攒出几万个 commit。推送前会对比行数，**只增不减**，防止某次取回失败导致空文件把历史清掉。
+
+### MongoDB
+
+设了 `MONGODB_URI` 就自动启用，不设就完全不碰：
+
+```bash
+MONGODB_URI="mongodb+srv://user:pass@cluster.xxx.mongodb.net/" ./aave/monitor once
+```
+
+集合和库名在 `config.json` 的 `mongo` 段配（`defi.aave_reserves`），**但连接串绝不写进配置文件**（含密码），只走环境变量或 Secrets。
+
+幂等靠「时间桶 + 唯一索引 + upsert」：时间戳规整到整小时作为 `bucketTs`，配合 `(symbol, bucketTs)` 唯一索引。CI 重试、手动补跑都不会产生重复文档，同一小时内重复运行只是刷新那条的值。
+
+⚠️ **Atlas 免费层的坑**：GitHub Actions runner 的 IP 是动态的 Azure 段，没法枚举，所以 Network Access 只能开 `0.0.0.0/0`。Atlas 原来那个能绕过白名单的 Data API 已经停服了，没有别的办法。安全性靠强密码 + TLS 兜着，另外给这个用户只授 `readWrite` 单库权限，别用 admin。
+
+查询示例：
+
+```js
+// USDC 最近 7 天的利用率曲线
+db.aave_reserves.find(
+  { symbol: 'USDC', bucketTs: { $gte: new Date(Date.now() - 7*864e5) } },
+  { bucketTs: 1, utilizationRate: 1, availableLiquidityUsd: 1, _id: 0 }
+).sort({ bucketTs: 1 })
 ```
 
 ## 高级规则（config.json 的 `rules` 数组）

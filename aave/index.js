@@ -7,6 +7,8 @@ import { makeClient, fetchReserves } from './reserves.js';
 import { evaluateRules } from './rules.js';
 import { loadState, saveState } from './state.js';
 import { loadConfig } from './config.js';
+import { appendHistory } from './history.js';
+import { writeMongo } from './mongo.js';
 import {
   alertMessage, summaryMessage, printTable, printThresholds, stripHtml,
   tgOptions, DEFAULT_TG, METRICS, COMPOSITE_FIELDS, digestMessage, topSeverity, statusMessage,
@@ -68,7 +70,7 @@ function gateCheck(tgCfg, severity, state, now) {
   return null;
 }
 
-async function runOnce(cfg, { notify = true, quiet = false } = {}) {
+async function runOnce(cfg, { notify = true, quiet = false, historyPath = null } = {}) {
   const statePath = resolve(ROOT, cfg.statePath || 'aave/data/state.json');
   const state = loadState(statePath);
   const tgCfg = tgOptions(cfg);
@@ -186,6 +188,32 @@ async function runOnce(cfg, { notify = true, quiet = false } = {}) {
     console.warn('[warn] 未配置 AAVE_TELEGRAM_BOT_TOKEN / AAVE_TELEGRAM_CHAT_ID，报警只打印在终端');
   }
 
+  // ── 历史落库 ──
+  // 放在报警之后：报警是主线，落库是附加价值，任何一个后端挂了都不能影响推送。
+  // 复用上面那次抓取的快照，不额外发 RPC 请求。
+  const bucketMinutes = cfg.historyIntervalMinutes ?? 60;
+  if (historyPath) {
+    try {
+      const r = appendHistory(historyPath, snapshot, bucketMinutes * 60_000);
+      if (r.written) console.log(`[history] 已写入 ${r.written} 行 -> ${historyPath}`);
+      else if (!quiet) console.log(`[history] 跳过（${r.reason}）`);
+    } catch (e) {
+      console.error(`[history] 写入失败（不影响报警）: ${e.message}`);
+    }
+  }
+  if (process.env.MONGODB_URI) {
+    try {
+      const r = await writeMongo(process.env.MONGODB_URI, snapshot, {
+        db: cfg.mongo?.db,
+        collection: cfg.mongo?.collection,
+        intervalMinutes: bucketMinutes,
+      });
+      console.log(`[mongo] 新增 ${r.inserted} · 刷新 ${r.updated} · 集合共 ${r.total} 条`);
+    } catch (e) {
+      console.error(`[mongo] 写入失败（不影响报警）: ${e.message}`);
+    }
+  }
+
   state.lastSnapshot = snapshot;
   saveState(statePath, state);
   return { snapshot, events, sent };
@@ -218,6 +246,7 @@ const argv = process.argv.slice(2);
 const cmd = argv[0] || 'once';
 const flags = new Set(argv.slice(1));
 const cfgFlag = argv.find((a) => a.startsWith('--config='))?.split('=')[1];
+const histFlag = argv.find((a) => a.startsWith('--history='))?.split('=')[1];
 
 try {
   const needCfg = ['show', 'once', 'watch', 'test-tg', 'snapshot', 'check', 'preview', 'fields'].includes(cmd);
@@ -267,12 +296,12 @@ try {
     console.log(`\n当前 fields: ${tgOptions(cfg).fields.join(', ')}`);
     console.log('默认 fields: ' + DEFAULT_TG.fields.join(', '));
   } else if (cmd === 'once') {
-    await runOnce(cfg, { notify: !flags.has('--dry-run'), quiet: flags.has('--quiet') });
+    await runOnce(cfg, { notify: !flags.has('--dry-run'), quiet: flags.has('--quiet'), historyPath: histFlag });
   } else if (cmd === 'watch') {
     const everyMs = (cfg.intervalSeconds || 300) * 1000;
     console.log(`[watch] 每 ${everyMs / 1000}s 检查一次 ｜ 配置 ${cfg.__path} ｜ 规则 ${cfg.rules.length} 条 ｜ Ctrl+C 退出`);
     for (;;) {
-      try { await runOnce(cfg, { notify: true, quiet: flags.has('--quiet') }); }
+      try { await runOnce(cfg, { notify: true, quiet: flags.has('--quiet'), historyPath: histFlag }); }
       catch (e) { console.error(`[error] ${e.message}`); }
       await new Promise((r) => setTimeout(r, everyMs));
     }
@@ -303,6 +332,7 @@ try {
   test-tg              同上，标题是「连通性测试」，用于首次验证凭据
   chat-id              列出 bot 能看到的 chat_id
     --config=path      指定配置文件（默认 aave/config.json）
+    --history=path     把这次快照追加到 CSV（间隔由 historyIntervalMinutes 控制，默认 60 分钟）
 `);
   }
 } catch (e) {

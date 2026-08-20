@@ -49,6 +49,12 @@
   },
   "heartbeatHours": 0,
   "statePath": "aave/data/state.json",
+  "historyIntervalMinutes": 60,
+  "mongo": {
+    "_说明": "MONGODB_URI 走环境变量/Secrets，不写在这里（含密码）。不设 MONGODB_URI 就完全不碰 mongo",
+    "db": "defi",
+    "collection": "aave_reserves"
+  },
   "rpcUrls": [
     "https://ethereum-rpc.publicnode.com",
     "https://eth.drpc.org"

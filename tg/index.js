@@ -10,14 +10,21 @@ function netHint(err) {
              || process.env.ALL_PROXY  || process.env.all_proxy;
   if (proxy && !process.env.NODE_USE_ENV_PROXY) {
     return `\n  ↳ 检测到代理 ${proxy}，但 Node 的内置 fetch 默认忽略代理环境变量。`
-         + `\n    改用 \`npm run <命令>\` 或 \`./aave-monitor <命令>\` 启动，`
+         + `\n    改用 \`npm run <命令>\` 或 \`./aave/monitor <命令>\` 启动，`
          + `\n    或手动加前缀：NODE_USE_ENV_PROXY=1 node aave/index.js ...`;
   }
   if (!proxy) {
     return '\n  ↳ 连不上 api.telegram.org。国内网络需要代理：先 export HTTPS_PROXY=http://127.0.0.1:7890，'
-         + '再用 npm run / ./aave-monitor 启动。';
+         + '再用 npm run / ./aave/monitor 启动。';
   }
   return '';
+}
+
+/** 把消息里可能出现的 token 抹掉 —— 请求 URL 含 token，
+ *  而 public repo 的 CI 日志是公开的，不能赌错误消息里不带 URL */
+function redact(msg, token) {
+  const t = String(msg ?? '');
+  return token ? t.split(token).join('<token已隐藏>') : t;
 }
 
 function creds(override = {}) {
@@ -67,13 +74,13 @@ export async function sendMessage(text, opts = {}) {
         await new Promise((r) => setTimeout(r, (retryAfter + 1) * 1000));
         continue;
       }
-      throw new Error(`Telegram ${res.status}: ${body.description || JSON.stringify(body)}`);
+      throw new Error(redact(`Telegram ${res.status}: ${body.description || JSON.stringify(body)}`, token));
     } catch (e) {
       lastErr = e;
       if (attempt < retries) await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
     }
   }
-  throw new Error(`Telegram 发送失败: ${lastErr?.message || lastErr}${netHint(lastErr)}`);
+  throw new Error(redact(`Telegram 发送失败: ${lastErr?.message || lastErr}${netHint(lastErr)}`, token));
 }
 
 /** HTML 模式下必须转义的字符 */
@@ -88,10 +95,10 @@ export async function getChatIds(token = process.env.TELEGRAM_BOT_TOKEN) {
   try {
     res = await fetch(`${API}/bot${token}/getUpdates`, { signal: AbortSignal.timeout(15_000) });
   } catch (e) {
-    throw new Error(`拉取会话失败: ${e.message}${netHint(e)}`);
+    throw new Error(redact(`拉取会话失败: ${e.message}${netHint(e)}`, token));
   }
   const body = await res.json();
-  if (!body.ok) throw new Error(`Telegram: ${body.description}`);
+  if (!body.ok) throw new Error(redact(`Telegram: ${body.description}`, token));
   const seen = new Map();
   for (const u of body.result || []) {
     const chat = u.message?.chat || u.channel_post?.chat || u.my_chat_member?.chat;
