@@ -35,11 +35,11 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: '24'
           cache: 'npm'
 
       - name: 安装依赖（只装 viem）
@@ -48,7 +48,7 @@ jobs:
       # 报警状态：cooldown 计时、变化类规则的基线快照、限流计数。
       # 丢了的话 cooldown 失效（条件持续满足就每轮都报），变化类规则不工作。
       - name: 恢复报警状态
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: aave/data
           key: aave-state-
@@ -76,7 +76,7 @@ jobs:
 
       - name: 保存报警状态
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: aave/data
           key: aave-state-${{ github.run_id }}-${{ github.run_attempt }}
