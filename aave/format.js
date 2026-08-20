@@ -88,17 +88,18 @@ export function alertMessage(ev, snapshot, kind, tg = DEFAULT_TG) {
     ? `${icon} <b>恢复正常</b> · ${escapeHtml(ev.symbol)}${tg.showRuleId ? ` · <code>${escapeHtml(ev.ruleId)}</code>` : ''}`
     : `${icon} <b>${escapeHtml(ev.title)}</b>${ruleLine}`;
 
-  const footerBits = [];
-  if (tg.showAaveLink) footerBits.push(`<a href="${aaveUrl(ev.reserve.address)}">Aave 页面</a>`);
-  if (tg.showTimestamp) footerBits.push(stamp(snapshot, tg));
+  // 池子名本身就是链接，不再单独放一个「Aave 页面」页脚 —— 和 digest 详情区保持一致
+  const name = tg.showAaveLink
+    ? `<a href="${aaveUrl(ev.reserve.address)}">${escapeHtml(ev.symbol)}</a>`
+    : escapeHtml(ev.symbol);
 
   return [
     head,
     ...ev.details.map((d) => `• ${escapeHtml(d)}`),
     '',
-    `<b>${escapeHtml(ev.symbol)}</b> 当前状态`,
+    `<b>${name}</b> 当前状态`,
     reserveBlock(ev.reserve, tg),
-    ...(footerBits.length ? ['', footerBits.join(' ｜ ')] : []),
+    ...(tg.showTimestamp ? ['', stamp(snapshot, tg)] : []),
   ].join('\n');
 }
 
