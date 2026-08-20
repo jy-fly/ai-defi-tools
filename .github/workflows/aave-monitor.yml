@@ -32,6 +32,11 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
+    # Secrets 配在 aave-env 这个 Environment 下，必须在这里声明才读得到
+    # （Environment secrets 只对声明了该 environment 的 job 可见）。
+    # ⚠️ 别给 aave-env 加 required reviewers 之类的保护规则 ——
+    #    每 5 分钟的定时任务会全部挂起等审批。
+    environment: aave-env
     timeout-minutes: 5
 
     steps:
