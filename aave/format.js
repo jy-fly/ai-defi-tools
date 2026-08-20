@@ -1,5 +1,5 @@
 // 消息与终端表格渲染。TG 消息的字段/样式全部由 config.json 的 telegram 段驱动
-import { fmtNum } from './rules.js';
+import { fmtNum, fmtBare } from './rules.js';
 import { METRICS, COMPOSITE_FIELDS, metricLabel, metricEmoji, shortLabel } from './metrics.js';
 import { escapeHtml } from '../tg/index.js';
 
@@ -125,7 +125,7 @@ function renderTable(snapshot, tg, prevReserves = null) {
   const rows = Object.values(snapshot.reserves);
 
   const head = ['资产', ...fields.map(shortLabel)];
-  const body = rows.map((r) => [r.symbol, ...fields.map((k) => fmtNum(k, r[k]))]);
+  const body = rows.map((r) => [r.symbol, ...fields.map((k) => fmtBare(k, r[k]))]);
   const widths = head.map((h, i) => Math.max(dispWidth(h), ...body.map((b) => dispWidth(b[i]))));
 
   const line = (cells) => cells.map((c, i) => padTo(c, widths[i])).join('  ').trimEnd();
