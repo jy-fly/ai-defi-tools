@@ -140,14 +140,14 @@ function gateCheck(tgCfg, severity, state, now) {
   return null;
 }
 
-async function runOnce(cfg, { notify = true, quiet = false, historyPath = null } = {}) {
+async function runOnce(cfg, { notify = true, quiet = false, historyPath = null, collectOnly = false } = {}) {
   const statePath = resolve(ROOT, cfg.statePath || 'aave/data/state.json');
   const state = loadState(statePath);
   const tgCfg = tgOptions(cfg);
   const snapshot = await snapshotNow(cfg);
   if (!quiet) printTable(snapshot);
 
-  const events = evaluateRules(cfg.rules, snapshot, state.lastSnapshot, state.history);
+  const events = collectOnly ? [] : evaluateRules(cfg.rules, snapshot, state.lastSnapshot, state.history);
   const now = Date.now();
   state.sentLog = (state.sentLog || []).filter((t) => now - t < 3_600_000);
   const outbox = [];
@@ -291,7 +291,7 @@ async function runOnce(cfg, { notify = true, quiet = false, historyPath = null }
     } catch (e) { console.error(`[telegram] ${e.message}`); }
   }
 
-  if (!outbox.length && !quiet) console.log('[ok] 无规则触发');
+  if (!outbox.length && !quiet) console.log(collectOnly ? '[ok] 采集模式，未判规则' : '[ok] 无规则触发');
   if (notify && !configured && outbox.length) {
     console.warn('[warn] 未配置 AAVE_TELEGRAM_BOT_TOKEN / AAVE_TELEGRAM_CHAT_ID，报警只打印在终端');
   }
@@ -412,7 +412,16 @@ try {
     console.log(`\n当前 fields: ${tgOptions(cfg).fields.join(', ')}`);
     console.log('默认 fields: ' + DEFAULT_TG.fields.join(', '));
   } else if (cmd === 'once') {
-    await runOnce(cfg, { notify: !flags.has('--dry-run'), quiet: flags.has('--quiet'), historyPath: histFlag });
+    // --collect-only: 只抓数据落库，不判规则不推送。
+    // 用于开第二个低频 runner 提高采样密度 —— 报警交给主 runner，
+    // 否则两边各自维护 cooldown，同一次下跌会被报两次
+    const collectOnly = flags.has('--collect-only');
+    await runOnce(cfg, {
+      notify: !flags.has('--dry-run') && !collectOnly,
+      quiet: flags.has('--quiet'),
+      historyPath: histFlag,
+      collectOnly,
+    });
   } else if (cmd === 'watch') {
     const everyMs = (cfg.intervalSeconds || 300) * 1000;
     console.log(`[watch] 每 ${everyMs / 1000}s 检查一次 ｜ 配置 ${cfg.__path} ｜ 规则 ${cfg.rules.length} 条 ｜ Ctrl+C 退出`);
@@ -443,6 +452,7 @@ try {
   fields               列出 telegram.fields 所有可用字段
   show [--json]        只打印指标，不判规则
   once [--dry-run]     检查一次并报警；--dry-run 只在终端预览
+       --collect-only  只抓数据落库，不判规则不推送（给副 runner 用）
   watch [--quiet]      常驻循环，间隔取 intervalSeconds
   snapshot [--full]    把当前状态发到 TG（--full 展开全部字段，--silent 静音，--dry-run 只预览）
   test-tg              同上，标题是「连通性测试」，用于首次验证凭据
