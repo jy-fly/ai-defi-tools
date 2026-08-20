@@ -176,6 +176,24 @@ async function runOnce(cfg, { notify = true, quiet = false, historyPath = null }
     }
   }
 
+  // 测试阶段：没报警也发一条，用来确认监控在跑（消息时间戳就是实际运行时刻，
+  // 正好能看出 GitHub cron 抖得多厉害）
+  if (!outbox.length && notify && configured && tgCfg.alwaysSend) {
+    const blocked = gateCheck(tgCfg, 'info', state, now);
+    if (blocked) {
+      console.log(`[hold] 状态快照暂不推送（${blocked}）`);
+    } else {
+      try {
+        await send(summaryMessage(snapshot, state.lastSnapshot, '✅ Aave V3 · 一切正常', tgCfg), { silent: true });
+        sent++;
+        state.sentLog.push(now);
+        console.log('[sent] 无报警，已推送状态快照（alwaysSend）');
+      } catch (e) {
+        console.error(`[telegram] ${e.message}`);
+      }
+    }
+  }
+
   if (heartbeat && notify && configured) {
     try {
       await send(summaryMessage(snapshot, state.lastSnapshot, '📊 Aave V3 定时快照', tgCfg), { silent: true });
@@ -232,6 +250,7 @@ function printTgConfig(cfg) {
   console.log(`消息字段    : ${(t.fields || []).join(', ')}`);
   console.log(`快照字段    : ${(t.heartbeatFields || []).join(', ')}`);
   console.log(`静音级别    : ${(t.silentSeverities || []).join(', ') || '（无）'}`);
+  if (t.alwaysSend) console.log('⚠️ alwaysSend  : 开启 —— 每轮无论有无报警都推送（测试用，上线记得关）');
   console.log(`Aave 链接   : ${t.showAaveLink ? '显示' : '隐藏'} ｜ 区块时间: ${t.showTimestamp ? '显示' : '隐藏'} ｜ 规则 ID: ${t.showRuleId ? '显示' : '隐藏'}`);
   const q = t.quietHours;
   console.log(`静默时段    : ${q && q.enabled !== false && q.start !== undefined

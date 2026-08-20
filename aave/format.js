@@ -10,6 +10,9 @@ export const DEFAULT_TG = {
   mode: 'digest',
   // digest 里是否附上「其余未触发池子」的一行对照
   digestIncludeOthers: true,
+  // 测试阶段用：没有任何报警时也推一条状态快照，好确认监控活着。
+  // 上线后关掉，否则每轮都来一条会麻木，真报警反而被淹没。
+  alwaysSend: false,
   fields: ['supplyAPY', 'reserveSize', 'availableLiquidity', 'utilizationRate', 'supplyCap', 'borrowLine', 'riskParams', 'status'],
   heartbeatFields: ['supplyAPY', 'utilizationRate', 'reserveSizeUsd', 'availableLiquidityUsd'],
   showRuleId: true,
