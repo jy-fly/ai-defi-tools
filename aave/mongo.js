@@ -57,8 +57,16 @@ export function bucketOf(ts, intervalMinutes) {
   return new Date(Math.floor(ts / bucketMs) * bucketMs);
 }
 
+/** 谁写的这条数据。GitHub Actions 会自动注入 GITHUB_ACTIONS 和 GITHUB_WORKFLOW，
+ *  借此区分主 runner / 副 runner / 本地，用来评估各自的实际贡献。 */
+export function writerId() {
+  if (!process.env.GITHUB_ACTIONS) return 'local';
+  return process.env.GITHUB_WORKFLOW || 'ci';
+}
+
 /** 构造某一层的 bulkWrite ops。纯函数，方便在没有数据库的环境下验证 */
 export function buildOps(snapshot, tier) {
+  const src = writerId();
   const timeBucket = bucketOf(snapshot.ts, tier.intervalMinutes);
   return Object.values(snapshot.reserves).map((r) => {
     const doc = {
@@ -72,7 +80,9 @@ export function buildOps(snapshot, tier) {
       if (v !== undefined) doc[f] = v;
     }
 
-    const update = { $set: doc, $setOnInsert: { timeBucket } };
+    // firstSource 只在首次创建时写入 —— 统计它的分布就知道每个 runner
+    // 独立贡献了多少个时间桶（source 会被后写的覆盖，只反映最后一次）
+    const update = { $set: { ...doc, source: src }, $setOnInsert: { timeBucket, firstSource: src } };
 
     if (tier.stats) {
       const min = {}, max = {};
