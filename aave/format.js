@@ -1,6 +1,6 @@
 // 消息与终端表格渲染。TG 消息的字段/样式全部由 config.json 的 telegram 段驱动
 import { fmtNum } from './rules.js';
-import { METRICS, COMPOSITE_FIELDS, metricLabel, metricEmoji } from './metrics.js';
+import { METRICS, COMPOSITE_FIELDS, metricLabel, metricEmoji, shortLabel } from './metrics.js';
 import { escapeHtml } from '../tg/index.js';
 
 const SEV = { info: 'ℹ️', warn: '⚠️', critical: '🚨' };
@@ -14,7 +14,7 @@ export const DEFAULT_TG = {
   // 上线后关掉，否则每轮都来一条会麻木，真报警反而被淹没。
   alwaysSend: false,
   fields: ['supplyAPY', 'reserveSize', 'availableLiquidity', 'utilizationRate', 'supplyCap', 'borrowLine', 'riskParams', 'status'],
-  heartbeatFields: ['supplyAPY', 'utilizationRate', 'reserveSizeUsd', 'availableLiquidityUsd'],
+  heartbeatFields: ['supplyAPY', 'utilizationRate', 'availableLiquidityUsd'],
   showRuleId: true,
   showAaveLink: true,
   showTimestamp: true,
@@ -93,32 +93,48 @@ const SEV_RANK = { info: 1, warn: 2, critical: 3 };
 const topSeverity = (items) =>
   items.reduce((acc, i) => (SEV_RANK[i.ev.severity] > SEV_RANK[acc] ? i.ev.severity : acc), 'info');
 
-/** 池子的紧凑单行，用于概览区和定时快照 */
-function compactLine(r, tg, icon = '', prev = null) {
+/** 显示宽度：CJK 和全角符号占 2 格，其余 1 格。
+ *  Telegram 的等宽字体里 CJK 正好是 ASCII 的两倍宽，所以能这样对齐。 */
+function dispWidth(s) {
+  return [...s].reduce((n, c) => n + (/[\u1100-\u115F\u2E80-\u303E\u3041-\u33FF\u3400-\u4DBF\u4E00-\u9FFF\uA000-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]/.test(c) ? 2 : 1), 0);
+}
+const padTo = (s, w) => s + ' '.repeat(Math.max(0, w - dispWidth(s)));
+
+/**
+ * 渲染等宽表格 + 变化摘要。
+ * 表格区刻意不放 emoji —— emoji 在等宽字体里宽度不统一，会把对齐搞乱；
+ * emoji 只出现在下面的变化区，那里不需要对齐。
+ */
+function renderTable(snapshot, tg, prevReserves = null) {
   const fields = tg.heartbeatFields || DEFAULT_TG.heartbeatFields;
-  const name = tg.showAaveLink
-    ? `<a href="${aaveUrl(r.address)}">${escapeHtml(r.symbol)}</a>`
-    : escapeHtml(r.symbol);
-  // Telegram 的 HTML 不支持 color，只能用 emoji 上色。
-  // 沿用 crypto/美股惯例：涨绿跌红。
-  const arrow = (k) => {
-    if (!prev || typeof prev[k] !== 'number') return '';
-    const d = r[k] - prev[k];
-    const pct = prev[k] !== 0 ? Math.abs(d / prev[k]) * 100 : 0;
-    const shown = fmtNum(k, Math.abs(d));
-    // 变化小到显示不出来（格式化后和 0 一样）或相对幅度不足 0.01%，
-    // 就整个不显示 —— 一行里挤满 ⚪️→ 只是噪音，留白反而清楚
-    if (shown === fmtNum(k, 0) || pct < 0.01) return '';
-    // 百分比精度自适应：大变化留一位够了，小变化要两位才看得出来
-    const pctStr = pct >= 1 ? pct.toFixed(1) : pct.toFixed(2);
-    return `${d > 0 ? ' 🟢▲' : ' 🔴▼'}${shown}/${pctStr}%`;
-  };
-  // symbol 补齐到 5 字符，多资产时概览区仍能对齐。
-  // 必须用 U+00A0 字符本身，不能用 &nbsp; 实体 —— Telegram 的 HTML 模式只认
-  // &lt; &gt; &amp; 三个实体，&nbsp; 会被原样显示成字面文本。
-  const pad = '\u00A0'.repeat(Math.max(0, 5 - r.symbol.length));
-  const body = fields.map((k) => `${metricLabel(k)} ${fmtNum(k, r[k])}${arrow(k)}`).join(' ｜ ');
-  return `${icon}<b>${name}</b>${pad}  ${body}`;
+  const rows = Object.values(snapshot.reserves);
+
+  const head = ['资产', ...fields.map(shortLabel)];
+  const body = rows.map((r) => [r.symbol, ...fields.map((k) => fmtNum(k, r[k]))]);
+  const widths = head.map((h, i) => Math.max(dispWidth(h), ...body.map((b) => dispWidth(b[i]))));
+
+  const line = (cells) => cells.map((c, i) => padTo(c, widths[i])).join('  ').trimEnd();
+  const table = [line(head), '─'.repeat(widths.reduce((a, b) => a + b + 2, -2)), ...body.map(line)];
+
+  // 变化区：只列真正变了的，平静时整块消失
+  const changes = [];
+  for (const r of rows) {
+    const p = prevReserves?.[r.symbol];
+    if (!p) continue;
+    const bits = [];
+    for (const k of fields) {
+      if (typeof p[k] !== 'number' || typeof r[k] !== 'number') continue;
+      const d = r[k] - p[k];
+      const pct = p[k] !== 0 ? Math.abs(d / p[k]) * 100 : 0;
+      const shown = fmtNum(k, Math.abs(d));
+      if (shown === fmtNum(k, 0) || pct < 0.01) continue;   // 看不出来的就不提
+      const pctStr = pct >= 1 ? pct.toFixed(1) : pct.toFixed(2);
+      bits.push(`${shortLabel(k)} ${d > 0 ? '🟢▲' : '🔴▼'}${shown}/${pctStr}%`);
+    }
+    // 同一个池子的多条变化，第二行起缩进对齐
+    bits.forEach((b, i) => changes.push(`${i === 0 ? escapeHtml(r.symbol) : ' '.repeat(dispWidth(r.symbol))} ${b}`));
+  }
+  return { table, changes };
 }
 
 /**
@@ -148,16 +164,16 @@ export function digestMessage(items, snapshot, tg = DEFAULT_TG) {
   ].filter(Boolean).join(' · ');
   const out = [`${fires.length ? (SEV[topSeverity(fires)] || '⚠️') : '✅'} <b>Aave V3 · ${counts}</b>`, ''];
 
-  // ── 概览区：所有池子各一行，触发的排在前面 ──
+  // ── 概览区：等宽表格，一眼看全 ──
   if (layout !== 'detail') {
-    const all = Object.values(snapshot.reserves);
-    const hit = all.filter((r) => groups.has(r.symbol));
-    const rest = all.filter((r) => !groups.has(r.symbol));
-    for (const r of hit) out.push(compactLine(r, tg, `${groupIcon(groups.get(r.symbol))} `));
-    if (tg.digestIncludeOthers !== false) {
-      for (const r of rest) out.push(compactLine(r, tg, '✅ '));
-    }
-    out.push('');
+    const { table } = renderTable(snapshot, tg, null);
+    // 表格前面标一列状态图标，让触发的池子一眼可辨
+    const marked = table.map((row, i) => {
+      if (i <= 1) return '   ' + row;                            // 表头和分隔线同样缩进
+      const sym = row.split(/\s+/)[0];
+      return `${groups.has(sym) ? groupIcon(groups.get(sym)) : '✅'} ${row}`;
+    });
+    out.push(`<pre>${escapeHtml(marked.join('\n'))}</pre>`, '');
   }
 
   // ── 详情区：只有触发的池子 ──
@@ -192,14 +208,21 @@ export function digestMessage(items, snapshot, tg = DEFAULT_TG) {
 }
 
 export function summaryMessage(snapshot, prev, title = '📊 Aave V3 定时快照', tg = DEFAULT_TG) {
-  const out = [`<b>${title}</b>`, ''];
-  for (const r of Object.values(snapshot.reserves)) {
-    out.push(compactLine(r, tg, '', prev?.reserves?.[r.symbol] || null));
+  const { table, changes } = renderTable(snapshot, tg, prev?.reserves || null);
+  const out = [`<b>${title}</b>`, '', `<pre>${escapeHtml(table.join('\n'))}</pre>`];
+  if (changes.length) out.push('', '较上次变化', ...changes.map(escapeHtmlKeepEmoji));
+  if (tg.showAaveLink) {
+    out.push('', Object.values(snapshot.reserves)
+      .map((r) => `<a href="${aaveUrl(r.address)}">${escapeHtml(r.symbol)}</a>`).join(' ｜ '));
   }
   if (tg.showTimestamp) out.push('', stamp(snapshot));
   return out.join('\n');
 }
 
+/** 变化行里已经含 emoji 和数字，只需转义可能的尖括号 */
+function escapeHtmlKeepEmoji(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 
 /** 完整状态消息：每个池子展开全部配置字段（手动查状态用，不是报警格式） */
 export function statusMessage(snapshot, tg = DEFAULT_TG, title = '📊 Aave V3 当前状态') {

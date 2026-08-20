@@ -29,7 +29,6 @@
     "heartbeatFields": [
       "supplyAPY",
       "utilizationRate",
-      "reserveSizeUsd",
       "availableLiquidityUsd"
     ],
     "showRuleId": true,
