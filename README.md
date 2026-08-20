@@ -133,6 +133,22 @@ node aave/index.js chat-id            # 列出 bot 能看到的 chat_id
 
 `./aave/monitor check` 会打印当前实际用的是哪个变量，配错了一眼能看出来。
 
+## GitHub Actions 上的实测
+
+cron 写的是每 5 分钟，但**实际做不到**。这个仓库的真实数据：15:21 跑了一次（`schedule` 触发，22 秒完成），之后 15:25 / 15:30 / 15:35 三次全部没跑 —— 15 分钟里应该 3 次，实际 0 次。
+
+GitHub 官方文档明说定时任务在高峰期会被延迟或跳过，所以别把它当准点闹钟。对「利用率突破 95%、流动性告急」这类事件，实际发现时间可能是 10-30 分钟后。
+
+社区经验：`*/5` 这种整点边界竞争最激烈，用带偏移的写法（`3,8,13,18,...`）据说好一些，可以试。
+
+手动触发时可以选模式（Actions 页面 → Run workflow → 下拉框）：
+
+- `once` — 正常检查，只在命中阈值时推送
+- `snapshot` — 无条件推一条当前状态到 TG，**用来验证 CI 上的凭据链路**
+- `check` — 只打印指标和阈值对照，不推送
+
+最后这点很实用：阈值全绿时 `once` 不发消息，所以 workflow 显示 "success" 并不能证明 Telegram 通了。用 `snapshot` 跑一次才能真正验证。
+
 ## 国内网络：代理
 
 `api.telegram.org` 需要代理。坑在于 **Node 的内置 `fetch` 默认忽略 `HTTPS_PROXY` 环境变量**（`curl` 会读，所以 `curl` 通不代表 Node 通），直接 `node aave/index.js` 会报 `fetch failed`。
@@ -314,7 +330,9 @@ node aave/index.js check
 duckdb -c "SELECT symbol, min(availableLiquidityUsd) AS 最低流动性, max(utilizationRate) AS 最高利用率 FROM 'history.csv' GROUP BY symbol"
 ```
 
-GitHub Actions 里数据存在独立的 `data` 分支，每次 force push 单个 commit —— CSV 内容持续累积，但 git 历史永远只有一条，不会攒出几万个 commit。推送前会对比行数，**只增不减**，防止某次取回失败导致空文件把历史清掉。
+**GitHub Actions 里不写 CSV** —— 它和 MongoDB 的 `aave_1h` 层粒度相同、数据重复，而 Mongo 版本还多了 `min`/`max`/`samples`。去掉后 CI 的权限能降到 `contents: read`（不需要往仓库推任何东西），少一套 force-push 逻辑和它的失败模式。
+
+CSV 保留作为本地临时导出手段：想丢给 DuckDB 或 Excel 看一眼时加 `--history=xxx.csv` 就行。
 
 ### MongoDB
 

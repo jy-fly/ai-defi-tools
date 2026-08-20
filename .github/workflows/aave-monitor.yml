@@ -9,12 +9,22 @@ on:
     # private 仓库要改成 '*/22 * * * *' 才能卡在每月 2000 分钟免费额度内。
     - cron: '*/5 * * * *'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: '运行模式'
+        required: false
+        default: once
+        type: choice
+        options:
+          - once      # 正常检查，只在命中阈值时才推送
+          - snapshot  # 无条件推一条当前状态到 TG，用来验证凭据链路
+          - check     # 只打印指标和阈值对照，不推送
 
-# 需要写权限，因为历史数据要 push 到 data 分支
+# 只读代码就够：历史数据写 MongoDB，不需要往仓库推任何东西
 permissions:
-  contents: write
+  contents: read
 
-# 同一时间只跑一个，避免两个实例同时读写状态和历史文件
+# 同一时间只跑一个，避免两个实例同时读写报警状态
 concurrency:
   group: aave-monitor
   cancel-in-progress: false
@@ -44,28 +54,10 @@ jobs:
           key: aave-state-
           restore-keys: aave-state-
 
-      # 历史数据存在独立的 data 分支，每次 force push 单个 commit ——
-      # 这样 CSV 内容持续累积，但 git 历史永远只有一条，不会攒出几万个 commit
-      - name: 取回历史数据
-        id: history
-        run: |
-          mkdir -p history-data
-          OLD_LINES=0
-          if git ls-remote --exit-code --heads origin data >/dev/null 2>&1; then
-            git fetch --depth=1 origin data
-            if git show FETCH_HEAD:history.csv > history-data/history.csv 2>/dev/null; then
-              OLD_LINES=$(wc -l < history-data/history.csv | tr -d ' ')
-              echo "已取回 $OLD_LINES 行历史"
-            fi
-          else
-            echo "data 分支还不存在，本次将创建"
-          fi
-          echo "old_lines=$OLD_LINES" >> "$GITHUB_OUTPUT"
-
       - name: 准备配置
         run: '[ -f aave/config.json ] || cp aave/config.example.json aave/config.json'
 
-      - name: 检查并报警
+      - name: 运行
         env:
           AAVE_TELEGRAM_BOT_TOKEN: ${{ secrets.AAVE_TELEGRAM_BOT_TOKEN }}
           AAVE_TELEGRAM_CHAT_ID: ${{ secrets.AAVE_TELEGRAM_CHAT_ID }}
@@ -73,7 +65,14 @@ jobs:
           ETH_RPC_URLS: ${{ secrets.ETH_RPC_URLS }}
           # 可选：配了就往 MongoDB 落一份（含密码，必须放 Secrets 不能进配置文件）
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
-        run: node aave/index.js once --quiet --history=history-data/history.csv
+        run: |
+          MODE="${{ inputs.mode || 'once' }}"
+          echo "模式: $MODE"
+          if [ "$MODE" = "once" ]; then
+            node aave/index.js once --quiet
+          else
+            node aave/index.js "$MODE"
+          fi
 
       - name: 保存报警状态
         if: always()
@@ -81,29 +80,3 @@ jobs:
         with:
           path: aave/data
           key: aave-state-${{ github.run_id }}-${{ github.run_attempt }}
-
-      - name: 保存历史数据
-        if: always()
-        env:
-          OLD_LINES: ${{ steps.history.outputs.old_lines }}
-        run: |
-          [ -f history-data/history.csv ] || { echo "无历史文件，跳过"; exit 0; }
-          NEW_LINES=$(wc -l < history-data/history.csv | tr -d ' ')
-          # 防呆：force push 会覆盖远程，万一取回步骤失败导致文件变空，
-          # 这一步会拦住，不让空文件把累积的历史清掉
-          if [ "$NEW_LINES" -lt "$OLD_LINES" ]; then
-            echo "::error::行数从 $OLD_LINES 降到 $NEW_LINES，拒绝推送以免清空历史"
-            exit 1
-          fi
-          if [ "$NEW_LINES" -eq "$OLD_LINES" ]; then
-            echo "本轮未写入新数据（未到落库间隔），跳过推送"
-            exit 0
-          fi
-          cd history-data
-          git init -q -b data
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add history.csv
-          git commit -q -m "chore: 历史数据 $NEW_LINES 行 ($(date -u '+%Y-%m-%d %H:%M UTC'))"
-          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" data
-          echo "已推送 $NEW_LINES 行到 data 分支"
