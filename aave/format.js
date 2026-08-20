@@ -128,9 +128,10 @@ function renderTable(snapshot, tg, prevReserves = null) {
   const body = rows.map((r) => [r.symbol, ...fields.map((k) => fmtNum(k, r[k]))]);
   const widths = head.map((h, i) => Math.max(dispWidth(h), ...body.map((b) => dispWidth(b[i]))));
 
-  const line = (cells) => cells.map((c, i) => padTo(c, widths[i])).join('  ').trimEnd();
+  const GAP = '    ';   // 列间距 4 空格
+  const line = (cells) => cells.map((c, i) => padTo(c, widths[i])).join(GAP).trimEnd();
   // 分隔线取表格宽度的 60% —— 拉满整行反而喧宾夺主，短一截更像分组线
-  const totalW = widths.reduce((a, b) => a + b + 2, -2);
+  const totalW = widths.reduce((a, b) => a + b + GAP.length, -GAP.length);
   const table = [line(head), '─'.repeat(Math.max(8, Math.round(totalW * 0.6))), ...body.map(line)];
 
   // 变化区：只列真正变了的，平静时整块消失
