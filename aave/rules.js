@@ -44,9 +44,16 @@ export function fmtNum(metric, v) {
 
 
 /** 从滑动窗口历史里取「windowMinutes 之前」的值。
- *  取时间戳 <= 目标时刻的最新一点；偏差超过一个窗口长度就算数据不足，
- *  避免历史稀疏时拿一个很老的点做对比、误报。 */
-function lookback(history, symbol, metric, windowMinutes, nowTs) {
+ *
+ *  取时间戳 <= 目标时刻的最新一点。采样密度不够时（比如 GitHub Actions 的
+ *  cron 实际 30+ 分钟才跑一次，根本没有 5 分钟前的点）默认降级使用最近可用的点，
+ *  并在消息里标注实际回看了多久 —— 漏报比迟报危险，宁可用 33 分钟前的数据
+ *  告诉你「跌了」，也别因为差 28 分钟就整条规则失效。
+ *
+ *  但「历史根本不够长」仍然跳过：最老的点都比目标时刻新，说明这个窗口
+ *  压根没积累够数据，此时任何对比都是无意义的。
+ *  规则里设 strictWindow: true 可以关掉降级，要求精确匹配。 */
+function lookback(history, symbol, metric, windowMinutes, nowTs, strict = false) {
   if (!Array.isArray(history) || !history.length) return { ok: false, reason: '暂无历史数据' };
   const target = nowTs - windowMinutes * 60_000;
   let found = null;
@@ -58,13 +65,14 @@ function lookback(history, symbol, metric, windowMinutes, nowTs) {
     const haveMin = Math.round((nowTs - oldest) / 60_000);
     return { ok: false, reason: `历史不足 ${windowMinutes} 分钟（目前只有 ${haveMin} 分钟）` };
   }
-  if (target - found.t > windowMinutes * 60_000) {
-    const age = Math.round((nowTs - found.t) / 60_000);
-    return { ok: false, reason: `最近的历史点是 ${age} 分钟前，偏离 ${windowMinutes} 分钟窗口太多` };
+  const ageMinutes = Math.round((nowTs - found.t) / 60_000);
+  const degraded = target - found.t > windowMinutes * 60_000;
+  if (degraded && strict) {
+    return { ok: false, reason: `最近的历史点是 ${ageMinutes} 分钟前，偏离 ${windowMinutes} 分钟窗口太多` };
   }
   const v = found.d?.[symbol]?.[metric];
   if (typeof v !== 'number') return { ok: false, reason: `历史里没有 ${symbol}.${metric}` };
-  return { ok: true, value: v, at: found.t, ageMinutes: Math.round((nowTs - found.t) / 60_000) };
+  return { ok: true, value: v, at: found.t, ageMinutes, degraded };
 }
 
 function evalCondition(cond, cur, prev, ctx = {}) {
@@ -88,16 +96,20 @@ function evalCondition(cond, cur, prev, ctx = {}) {
   if (op === 'dropPctOver' || op === 'risePctOver') {
     const win = cond.windowMinutes;
     if (!win) return { pass: false, detail: `${metric} ${op} 缺少 windowMinutes` };
-    const past = lookback(ctx.history, ctx.symbol, metric, win, ctx.nowTs ?? Date.now());
+    const past = lookback(ctx.history, ctx.symbol, metric, win, ctx.nowTs ?? Date.now(), cond.strictWindow === true);
     if (!past.ok) return { pass: false, detail: `${metric} ${win} 分钟窗口：${past.reason}` };
     if (past.value === 0) return { pass: false, detail: `${metric} ${win} 分钟前为 0，无法算百分比` };
 
     const pct = ((now - past.value) / Math.abs(past.value)) * 100;
     const moved = op === 'dropPctOver' ? -pct : pct;
     const label = op === 'dropPctOver' ? '跌幅' : '涨幅';
-    const text = `${metric} ${win} 分钟内${label} ${moved >= 0 ? moved.toFixed(2) : '(反向)' + Math.abs(moved).toFixed(2)}%`
-      + `（阈值 ${Number(value).toFixed(2)}%，${win} 分钟前 ${fmtNum(metric, past.value)} → 现在 ${fmtNum(metric, now)}`
-      + `${past.ageMinutes !== win ? `，实际回看 ${past.ageMinutes} 分钟` : ''}）`;
+    // 降级回看时把实际时长写清楚，否则「5 分钟跌 5%」的报警其实是 33 分钟的跌幅，会误导
+    const span = past.degraded
+      ? `实际回看 ${past.ageMinutes} 分钟 ⚠采样密度不足`
+      : (past.ageMinutes !== win ? `实际回看 ${past.ageMinutes} 分钟` : '');
+    const text = `${metric} ${win} 分钟窗口${label} ${moved >= 0 ? moved.toFixed(2) : '(反向)' + Math.abs(moved).toFixed(2)}%`
+      + `（阈值 ${Number(value).toFixed(2)}%，${fmtNum(metric, past.value)} → ${fmtNum(metric, now)}`
+      + `${span ? '，' + span : ''}）`;
     return { pass: moved >= value, detail: text };
   }
 
