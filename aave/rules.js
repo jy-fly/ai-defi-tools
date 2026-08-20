@@ -24,19 +24,6 @@ const PCT_METRICS = new Set([
 
 export function isPercentMetric(m) { return PCT_METRICS.has(m); }
 
-/** 表格里用的裸格式：去掉 % 和 $，列能窄一大截。
- *  单位靠表头和上下文说清楚，数字对齐后反而更好读。 */
-export function fmtBare(metric, v) {
-  if (typeof v === 'boolean') return v ? 'Y' : 'N';
-  if (typeof v !== 'number' || !Number.isFinite(v)) return '-';
-  if (PCT_METRICS.has(metric)) return v.toFixed(2);
-  const abs = Math.abs(v);
-  if (abs >= 1e9) return `${(v / 1e9).toFixed(2)}B`;
-  if (abs >= 1e6) return `${(v / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `${(v / 1e3).toFixed(2)}K`;
-  return v.toFixed(2);
-}
-
 export function fmtNum(metric, v) {
   if (typeof v === 'boolean') return v ? 'true' : 'false';
   if (v === Infinity) return '无上限';
