@@ -7,7 +7,7 @@
     "timezone": "Asia/Hong_Kong",
     "mode": "digest",
     "digestIncludeOthers": true,
-    "alwaysSend": true,
+    "alwaysSend": false,
     "dailyReport": {
       "_说明": "每天固定时间推一份状态。不是精确定时触发，而是「过了该时刻后第一次运行就发」—— GitHub cron 会抖动，这样才不会漏",
       "enabled": true,
@@ -204,6 +204,31 @@
       ],
       "cooldownMinutes": 180,
       "message": "{symbol} 可用流动性 24 小时内腰斩 → 现为 {availableLiquidityUsd}"
+    },
+    {
+      "id": "reserve-abnormal",
+      "severity": "critical",
+      "assets": "*",
+      "any": true,
+      "when": [
+        {
+          "metric": "isActive",
+          "op": "==",
+          "value": false
+        },
+        {
+          "metric": "isFrozen",
+          "op": "==",
+          "value": true
+        },
+        {
+          "metric": "isPaused",
+          "op": "==",
+          "value": true
+        }
+      ],
+      "cooldownMinutes": 240,
+      "message": "{symbol} 池子状态异常：active/frozen/paused 偏离正常值"
     }
   ]
 }
