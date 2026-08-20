@@ -94,7 +94,7 @@ function inQuietHours(q, at = new Date()) {
   if (!q || q.enabled === false || q.start === undefined || q.end === undefined) return false;
   const hour = Number(
     new Intl.DateTimeFormat('en-US', {
-      hour: 'numeric', hour12: false, timeZone: q.timezone || 'Asia/Shanghai',
+      hour: 'numeric', hour12: false, timeZone: q.timezone || 'Asia/Hong_Kong',
     }).format(at)
   ) % 24;
   return q.start <= q.end ? hour >= q.start && hour < q.end : hour >= q.start || hour < q.end;
@@ -107,7 +107,7 @@ function inQuietHours(q, at = new Date()) {
 function dueDailyReport(cfg, state, nowMs) {
   const d = cfg?.dailyReport;
   if (!d || d.enabled === false) return null;
-  const tz = d.timezone || 'Asia/Shanghai';
+  const tz = d.timezone || 'Asia/Hong_Kong';
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hour12: false,
@@ -129,7 +129,7 @@ function gateCheck(tgCfg, severity, state, now) {
 
   if (inQuietHours(tgCfg.quietHours, new Date(now)) && !exempt(tgCfg.quietHours?.exceptSeverities)) {
     const q = tgCfg.quietHours;
-    return `静默时段 ${q.start}:00-${q.end}:00 ${q.timezone || 'Asia/Shanghai'}`;
+    return `静默时段 ${q.start}:00-${q.end}:00 ${q.timezone || 'Asia/Hong_Kong'}`;
   }
 
   const rl = tgCfg.rateLimit;
@@ -246,9 +246,13 @@ async function runOnce(cfg, { notify = true, quiet = false, historyPath = null }
     }
   }
 
+  // 每日定时推送先判定：它和 alwaysSend 都是「无报警也发」，
+  // 同一轮里两个都发就是两条几乎一样的消息，所以 daily 优先、alwaysSend 让位
+  const daily = notify && configured ? dueDailyReport(tgCfg, state, now) : null;
+
   // 测试阶段：没报警也发一条，用来确认监控在跑（消息时间戳就是实际运行时刻，
   // 正好能看出 GitHub cron 抖得多厉害）
-  if (!outbox.length && notify && configured && tgCfg.alwaysSend) {
+  if (!outbox.length && !daily && notify && configured && tgCfg.alwaysSend) {
     const blocked = gateCheck(tgCfg, 'info', state, now);
     if (blocked) {
       console.log(`[hold] 状态快照暂不推送（${blocked}）`);
@@ -265,7 +269,6 @@ async function runOnce(cfg, { notify = true, quiet = false, historyPath = null }
   }
 
   // 每日定时状态推送
-  const daily = notify && configured ? dueDailyReport(tgCfg, state, now) : null;
   if (daily) {
     try {
       await send(
@@ -341,12 +344,12 @@ function printTgConfig(cfg) {
   if (t.alwaysSend) console.log('⚠️ alwaysSend  : 开启 —— 每轮无论有无报警都推送（测试用，上线记得关）');
   const d = t.dailyReport;
   console.log(`每日推送    : ${d && d.enabled !== false
-    ? `每天 ${String(d.hour ?? 10).padStart(2,'0')}:${String(d.minute ?? 0).padStart(2,'0')} ${d.timezone || 'Asia/Shanghai'}（过点后第一次运行补发）`
+    ? `每天 ${String(d.hour ?? 10).padStart(2,'0')}:${String(d.minute ?? 0).padStart(2,'0')} ${d.timezone || 'Asia/Hong_Kong'}（过点后第一次运行补发）`
     : '关闭'}`);
   console.log(`Aave 链接   : ${t.showAaveLink ? '显示' : '隐藏'} ｜ 区块时间: ${t.showTimestamp ? '显示' : '隐藏'} ｜ 规则 ID: ${t.showRuleId ? '显示' : '隐藏'}`);
   const q = t.quietHours;
   console.log(`静默时段    : ${q && q.enabled !== false && q.start !== undefined
-    ? `${q.start}:00-${q.end}:00 ${q.timezone || 'Asia/Shanghai'}（${(q.exceptSeverities || ['critical']).join('/')} 穿透）｜ 当前${inQuietHours(q) ? '在静默中' : '不在静默'}`
+    ? `${q.start}:00-${q.end}:00 ${q.timezone || 'Asia/Hong_Kong'}（${(q.exceptSeverities || ['critical']).join('/')} 穿透）｜ 当前${inQuietHours(q) ? '在静默中' : '不在静默'}`
     : '未启用'}`);
   console.log(`每小时上限  : ${t.rateLimit?.maxPerHour > 0
     ? `${t.rateLimit.maxPerHour} 条（${(t.rateLimit.exceptSeverities || ['critical']).join('/')} 穿透）` : '不限'}`);

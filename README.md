@@ -276,7 +276,7 @@ node aave/index.js preview USDC    # 按当前真实数据渲染 single 和 dige
 ### 每日定时推送
 
 ```json
-"dailyReport": { "enabled": true, "hour": 10, "minute": 0, "timezone": "Asia/Shanghai" }
+"dailyReport": { "enabled": true, "hour": 10, "minute": 0, "timezone": "Asia/Hong_Kong" }
 ```
 
 每天早上 10 点推一份三池状态，带涨跌对比。
@@ -303,7 +303,7 @@ WETH   存款 APY 1.47% ｜ 可用流动性 $959.50M
 "heartbeatHours": 0,
 "telegram": {
   "notifyOnRecover": true,
-  "quietHours": { "enabled": false, "start": 1, "end": 7, "timezone": "Asia/Shanghai", "exceptSeverities": ["critical"] },
+  "quietHours": { "enabled": false, "start": 1, "end": 7, "timezone": "Asia/Hong_Kong", "exceptSeverities": ["critical"] },
   "rateLimit": { "maxPerHour": 20, "exceptSeverities": ["critical"] }
 }
 ```
@@ -322,7 +322,7 @@ WETH   存款 APY 1.47% ｜ 可用流动性 $959.50M
 只想被真正的风险叫醒，机会信号白天再看：
 
 ```json
-"quietHours": { "enabled": true, "start": 23, "end": 8, "timezone": "Asia/Shanghai", "exceptSeverities": ["critical"] }
+"quietHours": { "enabled": true, "start": 23, "end": 8, "timezone": "Asia/Hong_Kong", "exceptSeverities": ["critical"] }
 ```
 
 配好后跑一次自检，会把上面所有配置连同当前是否在静默期一起打出来：

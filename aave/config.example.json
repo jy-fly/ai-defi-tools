@@ -12,7 +12,7 @@
       "enabled": true,
       "hour": 10,
       "minute": 0,
-      "timezone": "Asia/Shanghai"
+      "timezone": "Asia/Hong_Kong"
     },
     "digestLayout": "overview+detail",
     "digestDedupeFields": true,
@@ -43,7 +43,7 @@
       "enabled": false,
       "start": 1,
       "end": 7,
-      "timezone": "Asia/Shanghai",
+      "timezone": "Asia/Hong_Kong",
       "exceptSeverities": [
         "critical"
       ]
