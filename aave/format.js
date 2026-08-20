@@ -77,7 +77,7 @@ function fmtTime(ts, tz) {
 }
 
 const stamp = (snapshot, tg = DEFAULT_TG) =>
-  `block ${snapshot.blockNumber} ｜ ${fmtTime(snapshot.ts, tg.timezone || DEFAULT_TG.timezone)}`;
+  `${fmtTime(snapshot.ts, tg.timezone || DEFAULT_TG.timezone)} ｜ block ${snapshot.blockNumber}`;
 
 export function alertMessage(ev, snapshot, kind, tg = DEFAULT_TG) {
   const icon = kind === 'recover' ? '✅' : (SEV[ev.severity] || '⚠️');
