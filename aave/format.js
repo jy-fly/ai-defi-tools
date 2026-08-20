@@ -6,6 +6,8 @@ import { escapeHtml } from '../tg/index.js';
 const SEV = { info: 'ℹ️', warn: '⚠️', critical: '🚨' };
 
 export const DEFAULT_TG = {
+  // 消息里所有时间的显示时区。quietHours / dailyReport 没单独指定时也回落到它
+  timezone: 'Asia/Hong_Kong',
   // digest = 一轮检查的所有报警合并成一条消息（按池子分组）；single = 每条报警各发一条
   mode: 'digest',
   // digest 里是否附上「其余未触发池子」的一行对照
@@ -62,8 +64,20 @@ export function reserveBlock(r, tg = DEFAULT_TG, exclude = null) {
   return fields.map((f) => renderField(f, r)).filter(Boolean).join('\n');
 }
 
-const stamp = (snapshot) =>
-  `block ${snapshot.blockNumber} ｜ ${new Date(snapshot.ts).toISOString().replace('T', ' ').slice(0, 19)} UTC`;
+/** 按配置时区格式化时间戳。sv-SE 的输出正好是 YYYY-MM-DD HH:mm:ss */
+function fmtTime(ts, tz) {
+  const d = new Date(ts);
+  const t = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).format(d);
+  const zone = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' })
+    .formatToParts(d).find((p) => p.type === 'timeZoneName')?.value || '';
+  return `${t}${zone ? ' ' + zone : ''}`;
+}
+
+const stamp = (snapshot, tg = DEFAULT_TG) =>
+  `block ${snapshot.blockNumber} ｜ ${fmtTime(snapshot.ts, tg.timezone || DEFAULT_TG.timezone)}`;
 
 export function alertMessage(ev, snapshot, kind, tg = DEFAULT_TG) {
   const icon = kind === 'recover' ? '✅' : (SEV[ev.severity] || '⚠️');
@@ -76,7 +90,7 @@ export function alertMessage(ev, snapshot, kind, tg = DEFAULT_TG) {
 
   const footerBits = [];
   if (tg.showAaveLink) footerBits.push(`<a href="${aaveUrl(ev.reserve.address)}">Aave 页面</a>`);
-  if (tg.showTimestamp) footerBits.push(stamp(snapshot));
+  if (tg.showTimestamp) footerBits.push(stamp(snapshot, tg));
 
   return [
     head,
@@ -203,7 +217,7 @@ export function digestMessage(items, snapshot, tg = DEFAULT_TG) {
     }
   }
 
-  if (tg.showTimestamp) out.push(stamp(snapshot));
+  if (tg.showTimestamp) out.push(stamp(snapshot, tg));
   return out.join('\n');
 }
 
@@ -215,7 +229,7 @@ export function summaryMessage(snapshot, prev, title = '📊 Aave V3 定时快�
     out.push('', Object.values(snapshot.reserves)
       .map((r) => `<a href="${aaveUrl(r.address)}">${escapeHtml(r.symbol)}</a>`).join(' ｜ '));
   }
-  if (tg.showTimestamp) out.push('', stamp(snapshot));
+  if (tg.showTimestamp) out.push('', stamp(snapshot, tg));
   return out.join('\n');
 }
 
@@ -233,7 +247,7 @@ export function statusMessage(snapshot, tg = DEFAULT_TG, title = '📊 Aave V3 �
       : escapeHtml(r.symbol);
     out.push(`<b>${name}</b>`, reserveBlock(r, tg), '');
   }
-  if (tg.showTimestamp) out.push(stamp(snapshot));
+  if (tg.showTimestamp) out.push(stamp(snapshot, tg));
   return out.join('\n');
 }
 

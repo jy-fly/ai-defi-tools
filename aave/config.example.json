@@ -4,6 +4,7 @@
   "defaultCooldownMinutes": 60,
   "telegram": {
     "_说明": "mode=digest 时一轮检查的所有报警合并成一条消息（按池子分组）；single 则每条报警各发一条。fields 控制推送里包含哪些行，跑 `node aave/index.js fields` 看全部可用值，`preview` 看渲染效果",
+    "timezone": "Asia/Hong_Kong",
     "mode": "digest",
     "digestIncludeOthers": true,
     "alwaysSend": false,

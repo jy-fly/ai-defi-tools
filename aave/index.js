@@ -90,11 +90,11 @@ function pushHistory(state, snapshot, rules) {
 }
 
 /** 当前是否处于静默时段（支持跨午夜，如 23 点到次日 7 点） */
-function inQuietHours(q, at = new Date()) {
+function inQuietHours(q, at = new Date(), fallbackTz = 'Asia/Hong_Kong') {
   if (!q || q.enabled === false || q.start === undefined || q.end === undefined) return false;
   const hour = Number(
     new Intl.DateTimeFormat('en-US', {
-      hour: 'numeric', hour12: false, timeZone: q.timezone || 'Asia/Hong_Kong',
+      hour: 'numeric', hour12: false, timeZone: q.timezone || fallbackTz,
     }).format(at)
   ) % 24;
   return q.start <= q.end ? hour >= q.start && hour < q.end : hour >= q.start || hour < q.end;
@@ -107,7 +107,7 @@ function inQuietHours(q, at = new Date()) {
 function dueDailyReport(cfg, state, nowMs) {
   const d = cfg?.dailyReport;
   if (!d || d.enabled === false) return null;
-  const tz = d.timezone || 'Asia/Hong_Kong';
+  const tz = d.timezone || cfg?.timezone || 'Asia/Hong_Kong';
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hour12: false,
@@ -127,7 +127,7 @@ function dueDailyReport(cfg, state, nowMs) {
 function gateCheck(tgCfg, severity, state, now) {
   const exempt = (list) => (list || ['critical']).includes(severity);
 
-  if (inQuietHours(tgCfg.quietHours, new Date(now)) && !exempt(tgCfg.quietHours?.exceptSeverities)) {
+  if (inQuietHours(tgCfg.quietHours, new Date(now), tgCfg.timezone) && !exempt(tgCfg.quietHours?.exceptSeverities)) {
     const q = tgCfg.quietHours;
     return `静默时段 ${q.start}:00-${q.end}:00 ${q.timezone || 'Asia/Hong_Kong'}`;
   }
