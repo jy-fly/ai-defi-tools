@@ -6,7 +6,7 @@ import { dirname } from 'node:path';
 
 // 列的顺序就是 CSV 的列顺序，改动会影响已有文件的对齐，只往后加不要插中间
 export const COLUMNS = [
-  'timestamp', 'block', 'symbol', 'priceUsd',
+  'time', 'block', 'symbol', 'priceUsd',
   'supplyAPY', 'borrowAPY', 'utilizationRate',
   'reserveSize', 'reserveSizeUsd',
   'availableLiquidity', 'availableLiquidityUsd',
@@ -29,7 +29,7 @@ export function lastWrittenAt(path) {
   const lines = txt.split('\n');
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i].trim();
-    if (!line || line.startsWith('timestamp')) continue;
+    if (!line || line.startsWith('time,')) continue;
     const ts = Date.parse(line.split(',')[0]);
     if (!Number.isNaN(ts)) return ts;
   }
@@ -52,7 +52,7 @@ export function appendHistory(path, snapshot, minIntervalMs = 3_600_000) {
 
   const iso = new Date(snapshot.ts).toISOString().replace(/\.\d{3}Z$/, 'Z');
   const cell = (col, r) => {
-    if (col === 'timestamp') return iso;
+    if (col === 'time') return iso;
     if (col === 'block') return String(snapshot.blockNumber);
     if (col === 'symbol') return r.symbol;
     const v = r[col];

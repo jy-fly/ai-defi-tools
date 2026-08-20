@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "mongodb": "^7.5.0",
+    "socks": "^2.8.9",
     "viem": "^2.21.0"
   },
   "engines": {

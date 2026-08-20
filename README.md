@@ -304,9 +304,9 @@ node aave/index.js check
 ./aave/monitor once --history=data/history.csv
 ```
 
-14 列，每个池子一行：`timestamp,block,symbol,priceUsd,supplyAPY,borrowAPY,utilizationRate,reserveSize,reserveSizeUsd,availableLiquidity,availableLiquidityUsd,totalDebt,totalDebtUsd,supplyCapUsedPct`
+14 列，每个池子一行：`time,block,symbol,priceUsd,supplyAPY,borrowAPY,utilizationRate,reserveSize,reserveSizeUsd,availableLiquidity,availableLiquidityUsd,totalDebt,totalDebtUsd,supplyCapUsedPct`
 
-写入间隔靠**读 CSV 最后一行的时间戳**判断，不依赖状态文件 —— 天然幂等，CI 上 cache 丢了也不会重复写。
+写入间隔靠**读 CSV 最后一行的 `time`**判断，不依赖状态文件 —— 天然幂等，CI 上 cache 丢了也不会重复写。
 
 一年不到 2MB。查起来一条 SQL：
 
@@ -324,9 +324,17 @@ GitHub Actions 里数据存在独立的 `data` 分支，每次 force push 单个
 MONGODB_URI="mongodb+srv://user:pass@cluster.xxx.mongodb.net/" ./aave/monitor once
 ```
 
-集合和库名在 `config.json` 的 `mongo` 段配（`defi.aave_reserves`），**但连接串绝不写进配置文件**（含密码），只走环境变量或 Secrets。
+**连接串写在 `.env` 里**（本地）或 GitHub Secrets（CI），绝不进 `config.json` —— 它含密码。库名和集合名才写配置文件的 `mongo` 段（默认 `defi.aave_reserves`）。
 
-幂等靠「时间桶 + 唯一索引 + upsert」：时间戳规整到整小时作为 `bucketTs`，配合 `(symbol, bucketTs)` 唯一索引。CI 重试、手动补跑都不会产生重复文档，同一小时内重复运行只是刷新那条的值。
+```
+# .env
+MONGODB_URI=mongodb+srv://user:pass@cluster.xxxxx.mongodb.net/
+MONGODB_PROXY=socks5://127.0.0.1:7890    # 国内本地测试才需要
+```
+
+⚠️ **驱动不走 HTTP 代理**。MongoDB 是 TCP 连接，`HTTPS_PROXY` 和 `NODE_USE_ENV_PROXY` 对它完全无效（那套只管 Node 的 fetch）。国内本地连 Atlas 需要 SOCKS5，设 `MONGODB_PROXY`。填了 `http://` 开头的地址会被忽略并给出提示。部署到海外服务器或 Actions 上不用设。
+
+幂等靠「时间桶 + 唯一索引 + upsert」：`time` 是精确抓取时刻，`timeBucket` 是规整到整小时的桶，配合 `(symbol, timeBucket)` 唯一索引。CI 重试、手动补跑都不会产生重复文档，同一小时内重复运行只是刷新那条的值。
 
 ⚠️ **Atlas 免费层的坑**：GitHub Actions runner 的 IP 是动态的 Azure 段，没法枚举，所以 Network Access 只能开 `0.0.0.0/0`。Atlas 原来那个能绕过白名单的 Data API 已经停服了，没有别的办法。安全性靠强密码 + TLS 兜着，另外给这个用户只授 `readWrite` 单库权限，别用 admin。
 
@@ -335,9 +343,9 @@ MONGODB_URI="mongodb+srv://user:pass@cluster.xxx.mongodb.net/" ./aave/monitor on
 ```js
 // USDC 最近 7 天的利用率曲线
 db.aave_reserves.find(
-  { symbol: 'USDC', bucketTs: { $gte: new Date(Date.now() - 7*864e5) } },
-  { bucketTs: 1, utilizationRate: 1, availableLiquidityUsd: 1, _id: 0 }
-).sort({ bucketTs: 1 })
+  { symbol: 'USDC', timeBucket: { $gte: new Date(Date.now() - 7*864e5) } },
+  { timeBucket: 1, utilizationRate: 1, availableLiquidityUsd: 1, _id: 0 }
+).sort({ timeBucket: 1 })
 ```
 
 ## 高级规则（config.json 的 `rules` 数组）

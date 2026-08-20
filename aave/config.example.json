@@ -51,9 +51,21 @@
   "statePath": "aave/data/state.json",
   "historyIntervalMinutes": 60,
   "mongo": {
-    "_说明": "MONGODB_URI 走环境变量/Secrets，不写在这里（含密码）。不设 MONGODB_URI 就完全不碰 mongo",
-    "db": "defi",
-    "collection": "aave_reserves"
+    "_说明": "MONGODB_URI 走 .env / GitHub Secrets（含密码）。tiers 是降采样层级：粒度越粗留得越久，TTL 到期由 MongoDB 自动删除。stats=true 的层额外记录桶内 min/max",
+    "db": "aave",
+    "tiers": [
+      {
+        "collection": "aave_5m",
+        "intervalMinutes": 5,
+        "ttlDays": 90
+      },
+      {
+        "collection": "aave_1h",
+        "intervalMinutes": 60,
+        "ttlDays": 1095,
+        "stats": true
+      }
+    ]
   },
   "rpcUrls": [
     "https://ethereum-rpc.publicnode.com",

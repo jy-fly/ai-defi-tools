@@ -203,12 +203,14 @@ async function runOnce(cfg, { notify = true, quiet = false, historyPath = null }
   }
   if (process.env.MONGODB_URI) {
     try {
-      const r = await writeMongo(process.env.MONGODB_URI, snapshot, {
+      const rs = await writeMongo(process.env.MONGODB_URI, snapshot, {
         db: cfg.mongo?.db,
-        collection: cfg.mongo?.collection,
-        intervalMinutes: bucketMinutes,
+        tiers: cfg.mongo?.tiers,
       });
-      console.log(`[mongo] 新增 ${r.inserted} · 刷新 ${r.updated} · 集合共 ${r.total} 条`);
+      for (const r of rs) {
+        const note = r.indexNote === 'ok' ? '' : `（TTL 索引${r.indexNote === 'created' ? '已创建' : '已更新'}）`;
+        console.log(`[mongo] ${r.collection.padEnd(8)} 新增 ${r.inserted} · 刷新 ${r.updated} · 共 ${r.total} 条 · 留存 ${r.ttlDays} 天${note}`);
+      }
     } catch (e) {
       console.error(`[mongo] 写入失败（不影响报警）: ${e.message}`);
     }
