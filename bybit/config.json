@@ -1,6 +1,6 @@
 {
   "_说明": "监控 Bybit 现货 USDC/USDT 价格。用 USDT 买 USDC 时吃的是卖一价，所以盯 ask1Price",
-  "intervalSeconds": 60,
+  "intervalSeconds": 300,
   "defaultCooldownMinutes": 60,
   "confirmDelaySeconds": 15,
   "confirmRetrySeconds": 10,

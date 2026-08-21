@@ -1,0 +1,77 @@
+name: Bybit 价格监控
+
+# 盯 Bybit 现货 USDC/USDT 的卖一价，到 1.0002 / 1.0 时推送到 Bybit 群。
+# 和 Aave 那两个 workflow 完全独立：各自的 state、各自的群。
+on:
+  schedule:
+    # 每 5 分钟。注意 GitHub 实测会降频到 30 分钟左右，
+    # 想要真 5 分钟得跑在自己的机器上（./bybit/monitor watch）。
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '运行模式'
+        required: false
+        default: once
+        type: choice
+        options:
+          - once      # 正常检查，到价才推送
+          - snapshot  # 无条件推一条当前价格，用来验证凭据
+          - check     # 只打印，不推送
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bybit-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    environment: aave-env      # 复用同一套 Secrets
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: 安装依赖
+        run: npm ci --omit=dev
+
+      # 存 cooldown 计时和上一次价格，独立于 Aave 的 state
+      - name: 恢复状态
+        uses: actions/cache/restore@v6
+        with:
+          path: bybit/data
+          key: bybit-state-
+          restore-keys: bybit-state-
+
+      - name: 准备配置
+        run: '[ -f bybit/config.json ] || cp bybit/config.example.json bybit/config.json'
+
+      - name: 运行
+        env:
+          # 只配 CHAT_ID 的话 token 会回落到下面这个，同一个 bot 发两个群
+          BYBIT_TELEGRAM_BOT_TOKEN: ${{ secrets.BYBIT_TELEGRAM_BOT_TOKEN }}
+          BYBIT_TELEGRAM_CHAT_ID: ${{ secrets.BYBIT_TELEGRAM_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.AAVE_TELEGRAM_BOT_TOKEN }}
+        run: |
+          MODE="${{ inputs.mode || 'once' }}"
+          echo "模式: $MODE"
+          if [ "$MODE" = "once" ]; then
+            node bybit/index.js once --quiet
+          else
+            node bybit/index.js "$MODE"
+          fi
+
+      - name: 保存状态
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: bybit/data
+          key: bybit-state-${{ github.run_id }}-${{ github.run_attempt }}

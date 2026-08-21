@@ -35,15 +35,14 @@ function fmtTime(ts, tz) {
 }
 const stamp = (snap, tg) => fmtTime(snap.ts, tg.timezone || DEFAULT_TG.timezone);
 
-/** 两个价格用 <pre> 包住 —— Telegram 默认是比例字体，不然对不齐 */
-function priceBlock(r) {
-  return `<pre>卖一  ${price(r.ask1Price)}\n买一  ${price(r.bid1Price)}</pre>`;
+/** 一行给出买一卖一。不用 <pre> —— 一行里没有列要对齐，
+ *  普通文本在通知栏的预览里也显示得更完整 */
+function priceLine(r) {
+  const pair = r.symbol.replace(/USDT$/, '/USDT');
+  return `${escapeHtml(pair)} 卖一 ${price(r.ask1Price)}　买一 ${price(r.bid1Price)}`;
 }
 
-/** 标题带上价格，手机锁屏不用点开就能看到数字 */
-function headline(icon, r, suffix = '') {
-  return `${icon} <b>${escapeHtml(r.symbol.replace(/USDT$/, '/USDT'))} 卖一 ${price(r.ask1Price)}</b>${suffix}`;
-}
+const stamp2 = (snap, tg) => fmtTime(snap.ts, tg.timezone || DEFAULT_TG.timezone);
 
 export function digestMessage(items, snapshot, tg = DEFAULT_TG) {
   const fires = items.filter((i) => i.kind !== 'recover');
@@ -52,14 +51,14 @@ export function digestMessage(items, snapshot, tg = DEFAULT_TG) {
   const seen = new Set();
 
   for (const { ev, kind } of items) {
-    const r = ev.reserve;
-    if (!seen.has(ev.symbol)) {
-      out.push(headline(kind === 'recover' ? '✅' : icon, r), '', priceBlock(r));
-      seen.add(ev.symbol);
-    }
-    out.push(kind === 'recover' ? `✅ ${escapeHtml(ev.symbol)} 已回到阈值之上` : escapeHtml(ev.title));
+    if (seen.has(ev.symbol)) continue;
+    seen.add(ev.symbol);
+    out.push(`${kind === 'recover' ? '✅' : icon} <b>${priceLine(ev.reserve)}</b>`);
+    const reasons = items.filter((i) => i.ev.symbol === ev.symbol)
+      .map((i) => (i.kind === 'recover' ? '已回到阈值之上' : i.ev.title));
+    for (const r of reasons) out.push(escapeHtml(r));
   }
-  if (tg.showTimestamp) out.push('', stamp(snapshot, tg));
+  if (tg.showTimestamp) out.push('', stamp2(snapshot, tg));
   return out.join('\n');
 }
 
@@ -67,19 +66,18 @@ export function alertMessage(ev, snapshot, kind, tg = DEFAULT_TG) {
   return digestMessage([{ ev, kind }], snapshot, tg);
 }
 
-export function summaryMessage(snapshot, prev, title = '📊 USDC/USDT', tg = DEFAULT_TG) {
+export function summaryMessage(snapshot, prev, title = '📊', tg = DEFAULT_TG) {
   const out = [];
   for (const r of Object.values(snapshot.reserves)) {
+    let line = `${title} <b>${priceLine(r)}</b>`;
     const p = prev?.reserves?.[r.symbol];
-    out.push(`<b>${title}</b>`, '', priceBlock(r));
     if (p && typeof p.ask1Price === 'number') {
       const d = r.ask1Price - p.ask1Price;
-      if (Math.abs(d) >= 0.00005) {
-        out.push(`较上次 ${d > 0 ? '🟢▲' : '🔴▼'}${Math.abs(d).toFixed(4)}`);
-      }
+      if (Math.abs(d) >= 0.00005) line += `　${d > 0 ? '🟢▲' : '🔴▼'}${Math.abs(d).toFixed(4)}`;
     }
+    out.push(line);
   }
-  if (tg.showTimestamp) out.push('', stamp(snapshot, tg));
+  if (tg.showTimestamp) out.push('', stamp2(snapshot, tg));
   return out.join('\n');
 }
 
