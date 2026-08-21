@@ -161,7 +161,7 @@ async function runOnce(cfg, { notify = true, quiet = false, historyPath = null, 
   const db = mongo?.db || null;
 
   try {
-    const snapshot = await snapshotNow(cfg);
+    let snapshot = await snapshotNow(cfg);
     if (!quiet) printTable(snapshot);
 
     // 窗口规则的历史：优先从 MongoDB 读（多 runner 共享，密度更高），
@@ -179,7 +179,43 @@ async function runOnce(cfg, { notify = true, quiet = false, historyPath = null, 
       }
     }
 
-    const events = collectOnly ? [] : evaluateRules(cfg.rules, snapshot, state.lastSnapshot, history);
+    let events = collectOnly ? [] : evaluateRules(cfg.rules, snapshot, state.lastSnapshot, history);
+
+    // ── 二次确认 ──
+    // 等一会儿重新抓一次，只有两次都命中的才算真报警。
+    // 挡掉 RPC 返回异常值、区块重组、瞬时抖动造成的假警报。
+    // 必须放在抢占发送权之前 —— 否则第一次评估就占了 cooldown，
+    // 最终没发的话这条报警在 cooldown 期内就再也报不出来了。
+    const confirmSec = cfg.confirmDelaySeconds ?? 0;
+    const firstFiring = events.filter((e) => e.firing);
+    if (firstFiring.length && confirmSec > 0) {
+      console.log(`[confirm] ${firstFiring.length} 条命中，等 ${confirmSec}s 后复检`);
+      await new Promise((r) => setTimeout(r, confirmSec * 1000));
+      let snap2 = null;
+      try {
+        snap2 = await snapshotNow(cfg);
+      } catch (e) {
+        // 复检抓取失败就按第一次的结果发 —— RPC 抖一下不该让真报警被吞掉
+        console.error(`[confirm] 复检抓取失败，按首次结果发送: ${e.message}`);
+      }
+      if (snap2) {
+      // prevSnapshot 仍用上一轮的，否则 changePct 类规则会变成「和 20 秒前比」
+      const events2 = evaluateRules(cfg.rules, snap2, state.lastSnapshot, history);
+      const firstKeys = new Set(firstFiring.map((e) => e.key));
+
+      const dropped = firstFiring.filter((e) => !events2.find((x) => x.key === e.key && x.firing));
+      for (const e of dropped) console.log(`[confirm] ✗ ${e.key} 复检未命中，判定为抖动，不发送`);
+      const kept = events2.filter((e) => e.firing && firstKeys.has(e.key));
+      for (const e of kept) console.log(`[confirm] ✓ ${e.key} 两次均命中`);
+      // 第二次才出现的先压住，让它下一轮走完整的两次确认
+      const fresh = events2.filter((e) => e.firing && !firstKeys.has(e.key));
+      for (const e of fresh) console.log(`[confirm] ~ ${e.key} 仅复检命中，留待下一轮确认`);
+
+      events = events2.map((e) => (e.firing && !firstKeys.has(e.key) ? { ...e, firing: false } : e));
+      snapshot = snap2;   // 落库用更新的那份数据
+      }
+    }
+
     state.sentLog = (state.sentLog || []).filter((t) => now - t < 3_600_000);
     const outbox = [];
 
@@ -360,6 +396,8 @@ function printTgConfig(cfg) {
     : '未启用'}`);
   console.log(`每小时上限  : ${t.rateLimit?.maxPerHour > 0
     ? `${t.rateLimit.maxPerHour} 条（${(t.rateLimit.exceptSeverities || ['critical']).join('/')} 穿透）` : '不限'}`);
+  console.log(`二次确认    : ${cfg.confirmDelaySeconds > 0
+    ? `命中后等 ${cfg.confirmDelaySeconds}s 复检，两次都中才发` : '关闭'}`);
   console.log(`轮询间隔    : ${cfg.intervalSeconds || 300}s ｜ 默认重复间隔: ${cfg.defaultCooldownMinutes ?? 60} 分钟 ｜ 定时快照: ${cfg.heartbeatHours ? `每 ${cfg.heartbeatHours}h` : '关闭'}`);
 }
 
