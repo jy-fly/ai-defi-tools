@@ -1,50 +1,80 @@
 {
   "_说明": "监控 Bybit 现货 USDC/USDT 价格。用 USDT 买 USDC 时吃的是卖一价，所以盯 ask1Price",
-
   "intervalSeconds": 60,
   "defaultCooldownMinutes": 60,
   "confirmDelaySeconds": 15,
   "confirmRetrySeconds": 10,
   "confirmMinVotes": 2,
   "statePath": "bybit/data/state.json",
-
   "monitors": [
     {
       "symbol": "USDCUSDT",
       "alerts": {
         "ask1Price": {
-          "op": "<=", "value": 1.001, "severity": "warn",
-          "message": "USDC/USDT 卖一价 {ask1Price}，到 1.001 了"
+          "op": "<=",
+          "value": 1.0002,
+          "severity": "warn",
+          "message": "USDC/USDT 卖一 {ask1Price}，到 1.0002 了"
         }
       }
     }
   ],
-
   "rules": [
     {
       "id": "price-at-1",
       "severity": "critical",
       "assets": "*",
-      "when": [{ "metric": "ask1Price", "op": "<=", "value": 1 }],
+      "when": [
+        {
+          "metric": "ask1Price",
+          "op": "<=",
+          "value": 1
+        }
+      ],
       "cooldownMinutes": 30,
-      "message": "USDC/USDT 卖一价跌到 {ask1Price}，可以下手了"
+      "message": "USDC/USDT 卖一跌到 {ask1Price}，可以下手了"
     }
   ],
-
   "telegram": {
     "timezone": "Asia/Hong_Kong",
     "mode": "digest",
     "digestLayout": "overview+detail",
-    "fields": ["lastPrice", "bid1Price", "ask1Price", "price24hPcnt", "turnover24hUsd"],
-    "heartbeatFields": ["lastPrice", "bid1Price", "ask1Price", "price24hPcnt"],
+    "fields": [
+      "ask1Price",
+      "bid1Price"
+    ],
+    "heartbeatFields": [
+      "ask1Price",
+      "bid1Price"
+    ],
     "showRuleId": true,
     "showAaveLink": false,
     "showTimestamp": true,
-    "silentSeverities": ["info"],
+    "silentSeverities": [
+      "info"
+    ],
     "notifyOnRecover": true,
     "alwaysSend": false,
-    "dailyReport": { "enabled": true, "hour": 10, "minute": 0, "timezone": "Asia/Hong_Kong" },
-    "quietHours": { "enabled": false, "start": 1, "end": 7, "timezone": "Asia/Hong_Kong", "exceptSeverities": ["critical"] },
-    "rateLimit": { "maxPerHour": 20, "exceptSeverities": ["critical"] }
+    "dailyReport": {
+      "enabled": true,
+      "hour": 10,
+      "minute": 0,
+      "timezone": "Asia/Hong_Kong"
+    },
+    "quietHours": {
+      "enabled": false,
+      "start": 1,
+      "end": 7,
+      "timezone": "Asia/Hong_Kong",
+      "exceptSeverities": [
+        "critical"
+      ]
+    },
+    "rateLimit": {
+      "maxPerHour": 20,
+      "exceptSeverities": [
+        "critical"
+      ]
+    }
   }
 }

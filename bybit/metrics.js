@@ -1,3 +1,5 @@
+import { registerPctMetrics, registerPreciseMetrics } from '../core/rules.js';
+
 // Bybit 行情指标的中文标签和图标
 export const METRICS = {
   lastPrice:          { label: '最新价',    emoji: '💱' },
@@ -33,6 +35,11 @@ export const PCT_METRICS = [
 
 // 稳定币价格差异都在小数点后三四位，必须多给几位小数
 export const PRICE_METRICS = ['lastPrice', 'midPrice', 'bid1Price', 'ask1Price', 'highPrice24h', 'lowPrice24h', 'usdIndexPrice'];
+
+// 在这里注册而不是等 config.js 调用 —— 否则只 import format.js 的代码路径
+// 拿不到正确精度，价格会被显示成 1.00
+registerPctMetrics(PCT_METRICS);
+registerPreciseMetrics(PRICE_METRICS, 4);
 
 export const metricLabel = (m) => METRICS[m]?.label || m;
 export const metricEmoji = (m) => METRICS[m]?.emoji || '•';
