@@ -1,10 +1,7 @@
 name: Bybit 价格监控
 
-# 盯 Bybit 现货 USDC/USDT 的卖一价，到 1.0002 / 1.0 时推送到 Bybit 群。
-# 和 Aave 那两个 workflow 完全独立：各自的 state、各自的群。
-# 数据源用 Kraken —— Bybit 封美国 IP，而 runner 跑在 Azure 美国节点，
-# 直连 api.bybit.com 一律 403。Kraken 是美国合规交易所，不受影响。
-# 两家的 USDC/USDT 报价差在 0.0001 量级。
+# Bybit 封禁美国 IP，而 runner 跑在 Azure 美国节点，直连一律 403。
+# 所以先用机场订阅起一个 mihomo 本地代理，让请求从非美国出口出去。
 on:
   schedule:
     # 每 5 分钟。GitHub 实测会降频到 30 分钟左右，
@@ -18,9 +15,9 @@ on:
         default: once
         type: choice
         options:
-          - once      # 正常检查，到价才推送
-          - snapshot  # 无条件推一条当前价格，用来验证凭据
-          - check     # 只打印，不推送
+          - once
+          - snapshot
+          - check
 
 permissions:
   contents: read
@@ -29,11 +26,14 @@ concurrency:
   group: bybit-monitor
   cancel-in-progress: false
 
+env:
+  MIHOMO_VERSION: v1.19.30
+
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    environment: aave-env      # 复用同一套 Secrets
-    timeout-minutes: 5
+    environment: aave-env
+    timeout-minutes: 8
 
     steps:
       - uses: actions/checkout@v7
@@ -46,7 +46,65 @@ jobs:
       - name: 安装依赖
         run: npm ci --omit=dev
 
-      # 存 cooldown 计时和上一次价格，独立于 Aave 的 state
+      # ── 起代理 ──
+      # 订阅链接只经过环境变量和文件，绝不出现在任何输出里。
+      # 这是 public 仓库，Actions 日志谁都能看。
+      - name: 启动 mihomo 代理
+        # step 的 if 不能引用本 step 的 env（求值时还没设），直接判断 secret
+        if: ${{ secrets.CLASH_SUBSCRIPTION_URL != '' }}
+        env:
+          CLASH_SUB: ${{ secrets.CLASH_SUBSCRIPTION_URL }}
+        run: |
+          set -e
+          curl -sSL -o mihomo.gz \
+            "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/mihomo-linux-amd64-v1-${MIHOMO_VERSION}.gz"
+          gunzip mihomo.gz && chmod +x mihomo
+
+          mkdir -p .clash
+          # 用 proxy-provider 引用订阅：自己掌控端口和出口规则，
+          # 不受机场配置里那些花哨的分组影响
+          cat > .clash/config.yaml <<CONF
+          mixed-port: 7890
+          allow-lan: false
+          mode: rule
+          log-level: silent
+          proxy-providers:
+            airport:
+              type: http
+              url: "${CLASH_SUB}"
+              interval: 86400
+              path: ./providers/airport.yaml
+              health-check:
+                enable: true
+                url: http://www.gstatic.com/generate_204
+                interval: 300
+          proxy-groups:
+            - name: PROXY
+              type: url-test
+              use: [airport]
+              url: http://www.gstatic.com/generate_204
+              interval: 300
+              tolerance: 50
+          rules:
+            - MATCH,PROXY
+          CONF
+
+          ./mihomo -d .clash > /dev/null 2>&1 &
+          echo $! > .clash/pid
+
+          # 等代理真的能出网再往下走，最多 40 秒
+          for i in $(seq 1 20); do
+            if curl -s -m 5 -x http://127.0.0.1:7890 -o /dev/null -w '' https://api.bybit.com/v5/market/time; then
+              echo "代理就绪（第 ${i} 次探测）"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::代理 40 秒内没能连通 Bybit"
+          exit 1
+
+      - name: 准备配置
+        run: '[ -f bybit/config.json ] || cp bybit/config.example.json bybit/config.json'
+
       - name: 恢复状态
         uses: actions/cache/restore@v6
         with:
@@ -54,18 +112,18 @@ jobs:
           key: bybit-state-
           restore-keys: bybit-state-
 
-      - name: 准备配置
-        run: '[ -f bybit/config.json ] || cp bybit/config.example.json bybit/config.json'
-
       - name: 运行
         env:
-          # 只配 CHAT_ID 的话 token 会回落到下面这个，同一个 bot 发两个群
           BYBIT_TELEGRAM_BOT_TOKEN: ${{ secrets.BYBIT_TELEGRAM_BOT_TOKEN }}
           BYBIT_TELEGRAM_CHAT_ID: ${{ secrets.BYBIT_TELEGRAM_CHAT_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.AAVE_TELEGRAM_BOT_TOKEN }}
+          # 有代理就让 Node 的 fetch 走它（Node 默认无视这些变量，要显式开）
+          HTTPS_PROXY: ${{ secrets.CLASH_SUBSCRIPTION_URL != '' && 'http://127.0.0.1:7890' || '' }}
+          HTTP_PROXY: ${{ secrets.CLASH_SUBSCRIPTION_URL != '' && 'http://127.0.0.1:7890' || '' }}
+          NODE_USE_ENV_PROXY: '1'
         run: |
           MODE="${{ inputs.mode || 'once' }}"
-          echo "模式: $MODE"
+          echo "模式: $MODE ｜ 代理: ${HTTPS_PROXY:-无}"
           if [ "$MODE" = "once" ]; then
             node bybit/index.js once --quiet
           else
@@ -78,3 +136,7 @@ jobs:
         with:
           path: bybit/data
           key: bybit-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: 关掉代理
+        if: always()
+        run: '[ -f .clash/pid ] && kill "$(cat .clash/pid)" 2>/dev/null || true'
