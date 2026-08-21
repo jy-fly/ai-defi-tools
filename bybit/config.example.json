@@ -49,7 +49,7 @@
     ],
     "showRuleId": true,
     "showAaveLink": false,
-    "showTimestamp": true,
+    "showTimestamp": false,
     "silentSeverities": [
       "info"
     ],
