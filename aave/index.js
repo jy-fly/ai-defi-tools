@@ -199,20 +199,21 @@ async function runOnce(cfg, { notify = true, quiet = false, historyPath = null, 
         console.error(`[confirm] 复检抓取失败，按首次结果发送: ${e.message}`);
       }
       if (snap2) {
-      // prevSnapshot 仍用上一轮的，否则 changePct 类规则会变成「和 20 秒前比」
-      const events2 = evaluateRules(cfg.rules, snap2, state.lastSnapshot, history);
-      const firstKeys = new Set(firstFiring.map((e) => e.key));
+        console.log(`[confirm] 复检完成 block ${snapshot.blockNumber} → ${snap2.blockNumber}`);
+        // prevSnapshot 仍用上一轮的，否则 changePct 类规则会变成「和 20 秒前比」
+        const events2 = evaluateRules(cfg.rules, snap2, state.lastSnapshot, history);
+        const firstKeys = new Set(firstFiring.map((e) => e.key));
 
-      const dropped = firstFiring.filter((e) => !events2.find((x) => x.key === e.key && x.firing));
-      for (const e of dropped) console.log(`[confirm] ✗ ${e.key} 复检未命中，判定为抖动，不发送`);
-      const kept = events2.filter((e) => e.firing && firstKeys.has(e.key));
-      for (const e of kept) console.log(`[confirm] ✓ ${e.key} 两次均命中`);
-      // 第二次才出现的先压住，让它下一轮走完整的两次确认
-      const fresh = events2.filter((e) => e.firing && !firstKeys.has(e.key));
-      for (const e of fresh) console.log(`[confirm] ~ ${e.key} 仅复检命中，留待下一轮确认`);
+        const dropped = firstFiring.filter((e) => !events2.find((x) => x.key === e.key && x.firing));
+        for (const e of dropped) console.log(`[confirm] ✗ ${e.key} 复检未命中，判定为抖动，不发送`);
+        const kept = events2.filter((e) => e.firing && firstKeys.has(e.key));
+        for (const e of kept) console.log(`[confirm] ✓ ${e.key} 两次均命中`);
+        // 第二次才出现的先压住，让它下一轮走完整的两次确认
+        const fresh = events2.filter((e) => e.firing && !firstKeys.has(e.key));
+        for (const e of fresh) console.log(`[confirm] ~ ${e.key} 仅复检命中，留待下一轮确认`);
 
-      events = events2.map((e) => (e.firing && !firstKeys.has(e.key) ? { ...e, firing: false } : e));
-      snapshot = snap2;   // 落库用更新的那份数据
+        events = events2.map((e) => (e.firing && !firstKeys.has(e.key) ? { ...e, firing: false } : e));
+        snapshot = snap2;   // 落库用更新的那份数据
       }
     }
 
