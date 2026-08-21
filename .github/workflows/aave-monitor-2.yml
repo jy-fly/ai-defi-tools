@@ -1,0 +1,84 @@
+name: Aave 风控监控（副）
+
+# 和主 workflow 功能完全相同，只是 cron 错开。目的是提高及时性：
+# GitHub 对单个 workflow 的定时调度延迟很大（配 5 分钟，实测 33 分钟才跑一次），
+# 两个错峰 runner 能把实际间隔压到一半左右。
+#
+# 两边都会判规则、都会推送，但不会重复通知 —— 报警状态存在 MongoDB 里，
+# 靠原子操作抢占发送权：谁先跑到谁发，另一个读到已占用就跳过。
+# 每日推送同理，用日期做唯一键，一天只可能发出一条。
+# 这也是为什么它必须和主 workflow 用同一个 MONGODB_URI。
+on:
+  schedule:
+    # 错开整点边界，和主 workflow 的 */5 交替
+    - cron: '2,7,12,17,22,27,32,37,42,47,52,57 * * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '运行模式'
+        required: false
+        default: once
+        type: choice
+        options:
+          - once
+          - snapshot
+          - check
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aave-monitor-secondary
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    environment: aave-env
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: 安装依赖
+        run: npm ci --omit=dev
+
+      # 独立 cache：报警去重靠 MongoDB 的共享状态，这里只是本地兜底，
+      # 和主 workflow 混用反而会互相覆盖
+      - name: 恢复本地状态
+        uses: actions/cache/restore@v6
+        with:
+          path: aave/data
+          key: aave-state-secondary-
+          restore-keys: aave-state-secondary-
+
+      - name: 准备配置
+        run: '[ -f aave/config.json ] || cp aave/config.example.json aave/config.json'
+
+      - name: 运行
+        env:
+          AAVE_TELEGRAM_BOT_TOKEN: ${{ secrets.AAVE_TELEGRAM_BOT_TOKEN }}
+          AAVE_TELEGRAM_CHAT_ID: ${{ secrets.AAVE_TELEGRAM_CHAT_ID }}
+          ETH_RPC_URLS: ${{ secrets.ETH_RPC_URLS }}
+          # 必须和主 workflow 是同一个库，否则两边状态不互通、会重复通知
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+        run: |
+          MODE="${{ inputs.mode || 'once' }}"
+          echo "模式: $MODE"
+          if [ "$MODE" = "once" ]; then
+            node aave/index.js once --quiet
+          else
+            node aave/index.js "$MODE"
+          fi
+
+      - name: 保存本地状态
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: aave/data
+          key: aave-state-secondary-${{ github.run_id }}-${{ github.run_attempt }}

@@ -125,52 +125,69 @@ async function ensureIndexes(col, ttlDays) {
   return { ttl: 'ok', ttlSeconds };
 }
 
-/**
- * 把一次快照写进所有层级
- * @param {string} uri
- * @param {object} snapshot
- * @param {{db?:string, tiers?:Array}} opts
- */
-export async function writeMongo(uri, snapshot, opts = {}) {
-  const { db = 'aave', tiers = DEFAULT_TIERS } = opts;
-
+/** 打开连接。调用方负责 close —— 同一个连接要复用于落库、共享状态和读历史，
+ *  每件事各开一次连接在 CI 上会明显拖慢。 */
+export async function openMongo(uri, dbName = 'aave') {
   let MongoClient;
   try {
     ({ MongoClient } = await import('mongodb'));
   } catch {
     throw new Error('未安装 mongodb 驱动，跑 `npm i mongodb`');
   }
-
   const proxy = proxyOptions();
   if (proxy.proxyHost) console.log(`[mongo] 经 SOCKS5 代理 ${proxy.proxyHost}:${proxy.proxyPort} 连接`);
-
   const client = new MongoClient(uri, {
     serverSelectionTimeoutMS: 15_000,
     connectTimeoutMS: 15_000,
     ...proxy,
   });
+  await client.connect();
+  return {
+    client,
+    db: client.db(dbName),
+    close: () => client.close().catch(() => {}),
+  };
+}
 
+/** 把一次快照写进所有层级 */
+export async function writeTiers(db, snapshot, tiers = DEFAULT_TIERS) {
   const results = [];
-  try {
-    await client.connect();
-    const database = client.db(db);
-
-    for (const tier of tiers) {
-      const col = database.collection(tier.collection);
-      const idx = await ensureIndexes(col, tier.ttlDays);
-      const res = await col.bulkWrite(buildOps(snapshot, tier), { ordered: false });
-      results.push({
-        collection: tier.collection,
-        inserted: res.upsertedCount,
-        updated: res.modifiedCount,
-        total: await col.estimatedDocumentCount(),
-        ttlDays: tier.ttlDays,
-        indexNote: idx.ttl,
-      });
-    }
-    return results;
-  } finally {
-    // 必须关，否则 Node 进程不退出，CI 会一直挂到 timeout
-    await client.close().catch(() => {});
+  for (const tier of tiers) {
+    const col = db.collection(tier.collection);
+    const idx = await ensureIndexes(col, tier.ttlDays);
+    const res = await col.bulkWrite(buildOps(snapshot, tier), { ordered: false });
+    results.push({
+      collection: tier.collection,
+      inserted: res.upsertedCount,
+      updated: res.modifiedCount,
+      total: await col.estimatedDocumentCount(),
+      ttlDays: tier.ttlDays,
+      indexNote: idx.ttl,
+    });
   }
+  return results;
+}
+
+/** 从最细粒度的那层读回历史，喂给窗口类规则。
+ *  这样多个 runner 采的数据都能用于窗口对比 —— 比各自读自己 cache 里的
+ *  state.history 密得多。 */
+export async function readHistory(db, collection, maxWindowMinutes, nowTs) {
+  const METRICS = ['availableLiquidityUsd', 'utilizationRate', 'reserveSizeUsd', 'supplyAPY'];
+  const since = new Date(nowTs - maxWindowMinutes * 60_000 * 1.2);
+  const proj = { symbol: 1, timeBucket: 1, _id: 0 };
+  for (const m of METRICS) proj[m] = 1;
+
+  const docs = await db.collection(collection)
+    .find({ timeBucket: { $gte: since } }, { projection: proj })
+    .sort({ timeBucket: 1 }).toArray();
+
+  const byBucket = new Map();
+  for (const d of docs) {
+    const t = d.timeBucket.getTime();
+    if (!byBucket.has(t)) byBucket.set(t, { t, d: {} });
+    const m = {};
+    for (const k of METRICS) if (typeof d[k] === 'number') m[k] = d[k];
+    byBucket.get(t).d[d.symbol] = m;
+  }
+  return [...byBucket.values()].sort((a, b) => a.t - b.t);
 }

@@ -149,6 +149,40 @@ GitHub 官方文档明说定时任务在高峰期会被延迟或跳过，所以�
 
 最后这点很实用：阈值全绿时 `once` 不发消息，所以 workflow 显示 "success" 并不能证明 Telegram 通了。用 `snapshot` 跑一次才能真正验证。
 
+## 双 runner 与共享状态
+
+GitHub 对单个 workflow 的定时调度延迟很大 —— 配 `*/5`，实测 33 分钟才跑一次。所以开了两个功能相同、cron 错开的 workflow：
+
+| workflow | cron |
+|---|---|
+| `aave-monitor.yml` | `*/5` |
+| `aave-monitor-2.yml` | `2,7,12,17,...`（错开整点边界） |
+
+**两边都判规则、都推送，但不会重复通知。** 关键在于报警状态存在 MongoDB 的 `runner_state` 集合里，靠原子操作抢占发送权：
+
+- **报警**：`findOneAndUpdate` 带 cooldown 条件，谁先跑到谁拿到发送权，另一个读到已占用就跳过
+- **每日推送**：用 `daily:<日期>` 做唯一键 `insertOne`，重复插入会撞 duplicate key，所以一天只可能发出一条
+- **限流计数**：`sent:*` 记录共享，两个 runner 不会各算一套额度
+
+日志里能看到抢占结果：
+
+```
+[skip] 2026-08-21 的每日推送已由其他 runner 发出
+[skip] USDC-liq-drop-60m::USDC 已由其他 runner 处理或在 cooldown 内
+```
+
+所以两个 workflow **必须配同一个 `MONGODB_URI`**，否则状态不互通，就真的会重复通知了。
+
+### 窗口规则的历史也走 MongoDB
+
+窗口类规则（`dropPctOver`）原来读 `state.history`，那是各自 Actions cache 里的滑动窗口 —— 副 runner 采的数据主 runner 看不见。现在改成从最细粒度那层（`aave_5m`）读回历史：
+
+```
+[history] 从 aave_5m 读回 52 个时间点（覆盖 1440 分钟窗口）
+```
+
+两个 runner 的采样都能用于窗口对比，数据密度直接翻倍，`⚠采样密度不足` 的降级标注也会少很多。没配 MongoDB 时自动退回本地滑动窗口。
+
 ## 国内网络：代理
 
 `api.telegram.org` 需要代理。坑在于 **Node 的内置 `fetch` 默认忽略 `HTTPS_PROXY` 环境变量**（`curl` 会读，所以 `curl` 通不代表 Node 通），直接 `node aave/index.js` 会报 `fetch failed`。

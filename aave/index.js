@@ -8,7 +8,8 @@ import { evaluateRules } from './rules.js';
 import { loadState, saveState } from './state.js';
 import { loadConfig } from './config.js';
 import { appendHistory } from './history.js';
-import { writeMongo } from './mongo.js';
+import { openMongo, writeTiers, readHistory, writerId } from './mongo.js';
+import * as shared from './shared-state.js';
 import {
   alertMessage, summaryMessage, printTable, printThresholds, stripHtml,
   tgOptions, DEFAULT_TG, METRICS, COMPOSITE_FIELDS, digestMessage, topSeverity, statusMessage,
@@ -144,190 +145,196 @@ async function runOnce(cfg, { notify = true, quiet = false, historyPath = null, 
   const statePath = resolve(ROOT, cfg.statePath || 'aave/data/state.json');
   const state = loadState(statePath);
   const tgCfg = tgOptions(cfg);
-  const snapshot = await snapshotNow(cfg);
-  if (!quiet) printTable(snapshot);
-
-  const events = collectOnly ? [] : evaluateRules(cfg.rules, snapshot, state.lastSnapshot, state.history);
   const now = Date.now();
-  state.sentLog = (state.sentLog || []).filter((t) => now - t < 3_600_000);
-  const outbox = [];
+  const who = writerId();
 
-  for (const ev of events) {
-    const prev = state.alerts[ev.key] || {};
-    const wasFiring = Boolean(prev.firing);
-    const wasNotified = prev.notified ?? wasFiring; // 兼容旧 state 文件
-    const cooldownMs = (ev.rule.cooldownMinutes ?? cfg.defaultCooldownMinutes ?? 60) * 60_000;
-    const repeat = ev.rule.repeat !== false;
-    const notifyOnRecover = ev.rule.notifyOnRecover ?? tgCfg.notifyOnRecover ?? cfg.notifyOnRecover ?? true;
-
-    if (ev.firing) {
-      const since = wasFiring ? prev.since || now : now;
-      // 还没推过（含被闸门拦下的） 或 cooldown 已过
-      const wantNotify = !wasNotified || (repeat && now - (prev.lastNotifiedAt || 0) >= cooldownMs);
-      if (wantNotify) {
-        outbox.push({ ev, kind: wasNotified ? 'repeat' : 'fire' });
-        state.alerts[ev.key] = { firing: true, notified: wasNotified, lastNotifiedAt: prev.lastNotifiedAt || 0, since };
-      } else {
-        state.alerts[ev.key] = { ...prev, firing: true, notified: wasNotified, since };
-      }
-    } else if (wasFiring) {
-      // 只有真的推送过，才需要告诉你「恢复了」
-      if (notifyOnRecover && wasNotified) outbox.push({ ev, kind: 'recover' });
-      state.alerts[ev.key] = { firing: false, notified: false, lastNotifiedAt: prev.lastNotifiedAt || 0, since: 0 };
-    }
-  }
-
-  const hb = cfg.heartbeatHours || 0;
-  const heartbeat = hb > 0 && now - (state.lastHeartbeatAt || 0) >= hb * 3_600_000;
-
-  const configured = tgReady();
-  const digestMode = (tgCfg.mode || 'digest') !== 'single';
-  let sent = 0;
-
-  for (const { ev, kind } of outbox) {
-    console.log(`[alert] ${kind === 'recover' ? '恢复' : '触发'} ${ev.key} :: ${ev.details.join(' | ')}`);
-  }
-
-  const markNotified = (items) => {
-    for (const { ev, kind } of items) {
-      if (kind !== 'recover') {
-        state.alerts[ev.key] = { ...state.alerts[ev.key], notified: true, lastNotifiedAt: now };
-      }
-    }
-  };
-
-  if (outbox.length && !notify) {
-    // 终端预览：按实际会发出去的形态渲染
-    if (digestMode) {
-      console.log(`--- 报警内容预览（digest：${outbox.length} 条合并为 1 条消息）---\n${stripHtml(digestMessage(outbox, snapshot, tgCfg))}\n`);
-    } else {
-      for (const { ev, kind } of outbox) {
-        console.log(`--- 报警内容预览 ---\n${stripHtml(alertMessage(ev, snapshot, kind, tgCfg))}\n`);
-      }
-    }
-  } else if (outbox.length && configured && digestMode) {
-    // 一轮所有报警合并成一条：按最高级别过闸、按最高级别决定是否响铃
-    const fires = outbox.filter((i) => i.kind !== 'recover');
-    const sev = fires.length ? topSeverity(fires) : 'info';
-    const blocked = fires.length ? gateCheck(tgCfg, sev, state, now) : null;
-    if (blocked) {
-      console.log(`[hold] ${outbox.length} 条暂不推送（${blocked}），条件持续满足则下轮补发`);
-    } else {
-      try {
-        await send(digestMessage(outbox, snapshot, tgCfg), {
-          silent: (tgCfg.silentSeverities || []).includes(sev),
-        });
-        sent = 1;
-        state.sentLog.push(now);
-        markNotified(outbox);
-        console.log(`[sent] ${outbox.length} 条合并为 1 条消息已推送`);
-      } catch (e) {
-        console.error(`[telegram] ${e.message}`);
-      }
-    }
-  } else if (outbox.length && configured) {
-    // single 模式：逐条发
-    for (const { ev, kind } of outbox) {
-      const blocked = kind === 'recover' ? null : gateCheck(tgCfg, ev.severity, state, now);
-      if (blocked) {
-        console.log(`[hold] ${ev.key} 暂不推送（${blocked}），条件持续满足则下轮补发`);
-        continue;
-      }
-      try {
-        await send(alertMessage(ev, snapshot, kind, tgCfg), {
-          silent: (tgCfg.silentSeverities || []).includes(ev.severity),
-        });
-        sent++;
-        state.sentLog.push(now);
-        markNotified([{ ev, kind }]);
-      } catch (e) {
-        console.error(`[telegram] ${e.message}`);
-      }
-    }
-  }
-
-  // 每日定时推送先判定：它和 alwaysSend 都是「无报警也发」，
-  // 同一轮里两个都发就是两条几乎一样的消息，所以 daily 优先、alwaysSend 让位
-  const daily = notify && configured ? dueDailyReport(tgCfg, state, now) : null;
-
-  // 测试阶段：没报警也发一条，用来确认监控在跑（消息时间戳就是实际运行时刻，
-  // 正好能看出 GitHub cron 抖得多厉害）
-  if (!outbox.length && !daily && notify && configured && tgCfg.alwaysSend) {
-    const blocked = gateCheck(tgCfg, 'info', state, now);
-    if (blocked) {
-      console.log(`[hold] 状态快照暂不推送（${blocked}）`);
-    } else {
-      try {
-        await send(summaryMessage(snapshot, state.lastSnapshot, '✅ Aave V3 · 一切正常', tgCfg), { silent: true });
-        sent++;
-        state.sentLog.push(now);
-        console.log('[sent] 无报警，已推送状态快照（alwaysSend）');
-      } catch (e) {
-        console.error(`[telegram] ${e.message}`);
-      }
-    }
-  }
-
-  // 每日定时状态推送
-  if (daily) {
-    try {
-      await send(
-        summaryMessage(snapshot, state.lastSnapshot, `☀️ Aave V3 每日状态 · ${daily.date}`, tgCfg),
-        { silent: false }
-      );
-      state.lastDailyReport = daily.date;
-      sent++;
-      state.sentLog.push(now);
-      console.log(`[sent] 每日状态推送（${daily.date} ${daily.at} ${daily.tz}）`);
-    } catch (e) {
-      console.error(`[telegram] 每日推送失败: ${e.message}`);
-    }
-  }
-
-  if (heartbeat && notify && configured) {
-    try {
-      await send(summaryMessage(snapshot, state.lastSnapshot, '📊 Aave V3 定时快照', tgCfg), { silent: true });
-      state.lastHeartbeatAt = now;
-    } catch (e) { console.error(`[telegram] ${e.message}`); }
-  }
-
-  if (!outbox.length && !quiet) console.log(collectOnly ? '[ok] 采集模式，未判规则' : '[ok] 无规则触发');
-  if (notify && !configured && outbox.length) {
-    console.warn('[warn] 未配置 AAVE_TELEGRAM_BOT_TOKEN / AAVE_TELEGRAM_CHAT_ID，报警只打印在终端');
-  }
-
-  // ── 历史落库 ──
-  // 放在报警之后：报警是主线，落库是附加价值，任何一个后端挂了都不能影响推送。
-  // 复用上面那次抓取的快照，不额外发 RPC 请求。
-  const bucketMinutes = cfg.historyIntervalMinutes ?? 60;
-  if (historyPath) {
-    try {
-      const r = appendHistory(historyPath, snapshot, bucketMinutes * 60_000);
-      if (r.written) console.log(`[history] 已写入 ${r.written} 行 -> ${historyPath}`);
-      else if (!quiet) console.log(`[history] 跳过（${r.reason}）`);
-    } catch (e) {
-      console.error(`[history] 写入失败（不影响报警）: ${e.message}`);
-    }
-  }
+  // 有 MongoDB 就用它做跨 runner 的共享后端：报警状态、每日推送标记、
+  // 窗口规则的历史都从这里读写，多个 runner 才能协调而不是各发一套
+  let mongo = null;
   if (process.env.MONGODB_URI) {
     try {
-      const rs = await writeMongo(process.env.MONGODB_URI, snapshot, {
-        db: cfg.mongo?.db,
-        tiers: cfg.mongo?.tiers,
-      });
-      for (const r of rs) {
-        const note = r.indexNote === 'ok' ? '' : `（TTL 索引${r.indexNote === 'created' ? '已创建' : '已更新'}）`;
-        console.log(`[mongo] ${r.collection.padEnd(8)} 新增 ${r.inserted} · 刷新 ${r.updated} · 共 ${r.total} 条 · 留存 ${r.ttlDays} 天${note}`);
-      }
+      mongo = await openMongo(process.env.MONGODB_URI, cfg.mongo?.db);
     } catch (e) {
-      console.error(`[mongo] 写入失败（不影响报警）: ${e.message}`);
+      console.error(`[mongo] 连接失败（退回本地状态）: ${e.message}`);
     }
   }
+  const db = mongo?.db || null;
 
-  pushHistory(state, snapshot, cfg.rules);
-  state.lastSnapshot = snapshot;
-  saveState(statePath, state);
-  return { snapshot, events, sent };
+  try {
+    const snapshot = await snapshotNow(cfg);
+    if (!quiet) printTable(snapshot);
+
+    // 窗口规则的历史：优先从 MongoDB 读（多 runner 共享，密度更高），
+    // 没有 MongoDB 时退回 state 里的滑动窗口
+    const windows = cfg.rules.flatMap((r) => (r.when || []).map((c) => c.windowMinutes || 0));
+    const maxWindow = Math.max(0, ...windows);
+    let history = state.history;
+    if (db && maxWindow > 0) {
+      try {
+        const finest = (cfg.mongo?.tiers || [])[0]?.collection || 'aave_5m';
+        history = await readHistory(db, finest, maxWindow, snapshot.ts);
+        if (!quiet) console.log(`[history] 从 ${finest} 读回 ${history.length} 个时间点（覆盖 ${maxWindow} 分钟窗口）`);
+      } catch (e) {
+        console.error(`[history] 读取失败，退回本地滑动窗口: ${e.message}`);
+      }
+    }
+
+    const events = collectOnly ? [] : evaluateRules(cfg.rules, snapshot, state.lastSnapshot, history);
+    state.sentLog = (state.sentLog || []).filter((t) => now - t < 3_600_000);
+    const outbox = [];
+
+    for (const ev of events) {
+      const prev = state.alerts[ev.key] || {};
+      const cooldownMs = (ev.rule.cooldownMinutes ?? cfg.defaultCooldownMinutes ?? 60) * 60_000;
+      const repeat = ev.rule.repeat !== false;
+      const notifyOnRecover = ev.rule.notifyOnRecover ?? tgCfg.notifyOnRecover ?? cfg.notifyOnRecover ?? true;
+
+      if (ev.firing) {
+        // 共享后端下用原子抢占：并发时只有一个 runner 拿到发送权
+        const claimed = db
+          ? await shared.claimAlert(db, ev.key, repeat ? cooldownMs : Number.MAX_SAFE_INTEGER, now, who)
+          : null;
+        if (claimed === null) {
+          const wasNotified = prev.notified ?? Boolean(prev.firing);
+          const want = !wasNotified || (repeat && now - (prev.lastNotifiedAt || 0) >= cooldownMs);
+          if (want) {
+            outbox.push({ ev, kind: wasNotified ? 'repeat' : 'fire' });
+            state.alerts[ev.key] = { firing: true, notified: wasNotified, lastNotifiedAt: prev.lastNotifiedAt || 0, since: prev.since || now };
+          } else {
+            state.alerts[ev.key] = { ...prev, firing: true, notified: wasNotified, since: prev.since || now };
+          }
+        } else if (claimed) {
+          outbox.push({ ev, kind: prev.notified ? 'repeat' : 'fire' });
+          state.alerts[ev.key] = { firing: true, notified: true, lastNotifiedAt: now, since: prev.since || now };
+        } else {
+          console.log(`[skip] ${ev.key} 已由其他 runner 处理或在 cooldown 内`);
+          state.alerts[ev.key] = { ...prev, firing: true, since: prev.since || now };
+        }
+      } else if (prev.firing || db) {
+        const hadNotified = db ? await shared.releaseAlert(db, ev.key) : null;
+        const wasNotified = hadNotified === null ? (prev.notified ?? Boolean(prev.firing)) : hadNotified;
+        if (notifyOnRecover && wasNotified) outbox.push({ ev, kind: 'recover' });
+        state.alerts[ev.key] = { firing: false, notified: false, lastNotifiedAt: prev.lastNotifiedAt || 0, since: 0 };
+      }
+    }
+
+    // 每日推送：共享后端下用唯一键抢占，同一天只有一个 runner 能发
+    let daily = null;
+    if (notify && tg.isConfigured(creds())) {
+      const due = dueDailyReport(tgCfg, { lastDailyReport: db ? null : state.lastDailyReport }, now);
+      if (due) {
+        const won = db ? await shared.claimDaily(db, due.date, who) : true;
+        if (won) daily = due;
+        else console.log(`[skip] ${due.date} 的每日推送已由其他 runner 发出`);
+      }
+    }
+
+    const configured = tgReady();
+    const digestMode = (tgCfg.mode || 'digest') !== 'single';
+    let sent = 0;
+
+    for (const { ev, kind } of outbox) {
+      console.log(`[alert] ${kind === 'recover' ? '恢复' : '触发'} ${ev.key} :: ${ev.details.join(' | ')}`);
+    }
+
+    const markNotified = (items) => {
+      for (const { ev, kind } of items) {
+        if (kind !== 'recover') {
+          state.alerts[ev.key] = { ...state.alerts[ev.key], notified: true, lastNotifiedAt: now };
+        }
+      }
+    };
+
+    if (outbox.length && !notify) {
+      if (digestMode) {
+        console.log(`--- 报警内容预览（digest：${outbox.length} 条合并为 1 条消息）---\n${stripHtml(digestMessage(outbox, snapshot, tgCfg))}\n`);
+      } else {
+        for (const { ev, kind } of outbox) {
+          console.log(`--- 报警内容预览 ---\n${stripHtml(alertMessage(ev, snapshot, kind, tgCfg))}\n`);
+        }
+      }
+    } else if (outbox.length && configured && digestMode) {
+      const fires = outbox.filter((i) => i.kind !== 'recover');
+      const sev = fires.length ? topSeverity(fires) : 'info';
+      const blocked = fires.length ? gateCheck(tgCfg, sev, state, now) : null;
+      if (blocked) {
+        console.log(`[hold] ${outbox.length} 条暂不推送（${blocked}）`);
+      } else {
+        try {
+          await send(digestMessage(outbox, snapshot, tgCfg), { silent: (tgCfg.silentSeverities || []).includes(sev) });
+          sent = 1;
+          state.sentLog.push(now);
+          markNotified(outbox);
+          if (db) await shared.recordSend(db, now, who);
+          console.log(`[sent] ${outbox.length} 条合并为 1 条消息已推送`);
+        } catch (e) {
+          console.error(`[telegram] ${e.message}`);
+        }
+      }
+    } else if (outbox.length && configured) {
+      for (const { ev, kind } of outbox) {
+        const blocked = kind === 'recover' ? null : gateCheck(tgCfg, ev.severity, state, now);
+        if (blocked) { console.log(`[hold] ${ev.key} 暂不推送（${blocked}）`); continue; }
+        try {
+          await send(alertMessage(ev, snapshot, kind, tgCfg), { silent: (tgCfg.silentSeverities || []).includes(ev.severity) });
+          sent++;
+          state.sentLog.push(now);
+          markNotified([{ ev, kind }]);
+          if (db) await shared.recordSend(db, now, who);
+        } catch (e) {
+          console.error(`[telegram] ${e.message}`);
+        }
+      }
+    }
+
+    if (daily) {
+      try {
+        await send(summaryMessage(snapshot, state.lastSnapshot, `☀️ Aave V3 每日状态 · ${daily.date}`, tgCfg), { silent: false });
+        state.lastDailyReport = daily.date;
+        sent++;
+        state.sentLog.push(now);
+        if (db) await shared.recordSend(db, now, who);
+        console.log(`[sent] 每日状态推送（${daily.date} ${daily.at} ${daily.tz}）`);
+      } catch (e) {
+        console.error(`[telegram] 每日推送失败: ${e.message}`);
+      }
+    }
+
+    if (!outbox.length && !quiet) console.log(collectOnly ? '[ok] 采集模式，未判规则' : '[ok] 无规则触发');
+    if (notify && !configured && outbox.length) {
+      console.warn('[warn] 未配置 AAVE_TELEGRAM_BOT_TOKEN / AAVE_TELEGRAM_CHAT_ID，报警只打印在终端');
+    }
+
+    // ── 落库 ──
+    const bucketMinutes = cfg.historyIntervalMinutes ?? 60;
+    if (historyPath) {
+      try {
+        const r = appendHistory(historyPath, snapshot, bucketMinutes * 60_000);
+        if (r.written) console.log(`[history] 已写入 ${r.written} 行 -> ${historyPath}`);
+        else if (!quiet) console.log(`[history] 跳过（${r.reason}）`);
+      } catch (e) {
+        console.error(`[history] 写入失败（不影响报警）: ${e.message}`);
+      }
+    }
+    if (db) {
+      try {
+        for (const r of await writeTiers(db, snapshot, cfg.mongo?.tiers)) {
+          const note = r.indexNote === 'ok' ? '' : `（TTL 索引${r.indexNote === 'created' ? '已创建' : '已更新'}）`;
+          console.log(`[mongo] ${r.collection.padEnd(8)} 新增 ${r.inserted} · 刷新 ${r.updated} · 共 ${r.total} 条 · 留存 ${r.ttlDays} 天${note}`);
+        }
+        await shared.pruneSends(db, now - 3_600_000);
+      } catch (e) {
+        console.error(`[mongo] 写入失败（不影响报警）: ${e.message}`);
+      }
+    }
+
+    pushHistory(state, snapshot, cfg.rules);
+    state.lastSnapshot = snapshot;
+    saveState(statePath, state);
+    return { snapshot, events, sent };
+  } finally {
+    await mongo?.close();
+  }
 }
 
 /** 打印 TG 相关配置的自检信息 */
