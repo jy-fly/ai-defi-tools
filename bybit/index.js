@@ -224,7 +224,7 @@ async function runOnce(cfg, { notify = true, quiet = false } = {}) {
     if (blocked) console.log(`[hold] 状态快照暂不推送（${blocked}）`);
     else {
       try {
-        await send(summaryMessage(snapshot, state.lastSnapshot, '✅ Bybit 现货 · 一切正常', tgCfg), { silent: true });
+        await send(summaryMessage(snapshot, state.lastSnapshot, '✅', tgCfg), { silent: true });
         sent++; state.sentLog.push(now);
         console.log('[sent] 无报警，已推送状态快照（alwaysSend）');
       } catch (e) { console.error(`[telegram] ${e.message}`); }
@@ -233,7 +233,7 @@ async function runOnce(cfg, { notify = true, quiet = false } = {}) {
 
   if (daily) {
     try {
-      await send(summaryMessage(snapshot, state.lastSnapshot, `☀️ Bybit 现货每日状态 · ${daily.date}`, tgCfg), { silent: false });
+      await send(summaryMessage(snapshot, state.lastSnapshot, '☀️', tgCfg), { silent: false });
       state.lastDailyReport = daily.date;
       sent++; state.sentLog.push(now);
       console.log(`[sent] 每日状态推送（${daily.date} ${daily.at} ${daily.tz}）`);
@@ -300,7 +300,7 @@ try {
     const snap = await snapshotNow(cfg);
     const t = tgOptions(cfg);
     const text = flags.has('--full') ? statusMessage(snap, t)
-      : summaryMessage(snap, null, cmd === 'test-tg' ? '🔔 Bybit 监控连通性测试' : '📊 Bybit 现货当前状态', t);
+      : summaryMessage(snap, null, cmd === 'test-tg' ? '🔔' : '📊', t);
     console.log(stripHtml(text));
     if (flags.has('--dry-run')) console.log('\n[dry-run] 未发送');
     else { requireTg(); await send(text, { silent: flags.has('--silent') }); console.log('\n[ok] 已发送到 Telegram'); }
