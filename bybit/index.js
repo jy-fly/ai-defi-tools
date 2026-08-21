@@ -44,7 +44,7 @@ function requireTg() {
   );
 }
 
-const snapshotNow = (cfg) => fetchMarkets(cfg.assets, cfg.source || 'kraken');
+const snapshotNow = (cfg) => fetchMarkets(cfg.assets, cfg.source || 'kraken', cfg.priceOffset || 0);
 
 function inQuietHours(q, at = new Date(), fallbackTz = 'Asia/Hong_Kong') {
   if (!q || q.enabled === false || q.start === undefined || q.end === undefined) return false;
@@ -262,8 +262,9 @@ function printTgConfig(cfg) {
     ? `每天 ${String(d.hour ?? 10).padStart(2, '0')}:${String(d.minute ?? 0).padStart(2, '0')} ${d.timezone || t.timezone}` : '关闭'}`);
   console.log(`报警确认    : ${cfg.confirmDelaySeconds > 0
     ? `最多 ${cfg.confirmRetrySeconds > 0 ? 3 : 2} 次抓取，累计命中 ${cfg.confirmMinVotes ?? 2} 次才发` : '关闭'}`);
-  console.log(`数据源      : ${cfg.source || 'kraken'}${(cfg.source || 'kraken') === 'kraken'
-    ? '（Kraken 不封美国 IP，GitHub Actions 上只能用它）' : '（Bybit 封美国 IP，CI 上会 403）'}`);
+  const src = cfg.source || 'kraken';
+  console.log(`数据源      : ${src}${src === 'kraken' ? '（不封美国 IP，CI 上只能用它）' : '（封美国 IP，CI 上会 403）'}`
+    + `${cfg.priceOffset ? ` ｜ 校准 ${cfg.priceOffset > 0 ? '+' : ''}${cfg.priceOffset}（平移到 Bybit 口径）` : ''}`);
   console.log(`轮询间隔    : ${cfg.intervalSeconds || 60}s ｜ 默认重复间隔: ${cfg.defaultCooldownMinutes ?? 60} 分钟`);
 }
 

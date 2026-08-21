@@ -54,15 +54,30 @@ async function fromKraken(symbol) {
 
 const SOURCES = { bybit: fromBybit, kraken: fromKraken };
 
-export async function fetchTicker(symbol, source = 'kraken') {
+/**
+ * @param {number} offset 价格校准。用非 Bybit 的源做代理时，把报价平移到
+ *   Bybit 口径，这样阈值始终按 Bybit 的价格写，换数据源不用改阈值。
+ *   实测 Kraken 卖一稳定比 Bybit 高 0.0001，所以 offset 填 -0.0001。
+ *   ⚠️ 这是经验值，行情剧烈时两家价差会变，别当成永远成立。
+ */
+export async function fetchTicker(symbol, source = 'kraken', offset = 0) {
   const fn = SOURCES[source];
   if (!fn) throw new Error(`未知数据源 ${source}，可选：${Object.keys(SOURCES).join(' / ')}`);
-  return fn(symbol);
+  const t = await fn(symbol);
+  if (offset) {
+    t.rawAsk1Price = t.ask1Price;
+    t.rawBid1Price = t.bid1Price;
+    for (const k of ['ask1Price', 'bid1Price', 'lastPrice']) {
+      if (typeof t[k] === 'number') t[k] = t[k] + offset;
+    }
+    t.offset = offset;
+  }
+  return t;
 }
 
 /** 返回和规则引擎约定的快照结构 */
-export async function fetchMarkets(symbols, source = 'kraken') {
-  const list = await Promise.all(symbols.map((s) => fetchTicker(s.symbol || s, source)));
+export async function fetchMarkets(symbols, source = 'kraken', offset = 0) {
+  const list = await Promise.all(symbols.map((s) => fetchTicker(s.symbol || s, source, offset)));
   const reserves = {};
   for (const t of list) reserves[t.symbol] = t;
   return { ts: Date.now(), blockNumber: null, reserves };

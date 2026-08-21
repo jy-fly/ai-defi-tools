@@ -1,6 +1,7 @@
 {
   "_说明": "Bybit 现货 USDC/USDT 价格监控。数据源用 Kraken —— Bybit 封美国 IP，GitHub Actions 连不上",
   "source": "kraken",
+  "priceOffset": -0.0001,
   "intervalSeconds": 300,
   "defaultCooldownMinutes": 60,
   "confirmDelaySeconds": 15,
