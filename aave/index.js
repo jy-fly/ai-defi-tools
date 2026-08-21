@@ -4,7 +4,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { makeClient, fetchReserves } from './reserves.js';
-import { evaluateRules } from './rules.js';
+import { evaluateRules, confirmedKeys } from './rules.js';
 import { loadState, saveState } from './state.js';
 import { loadConfig } from './config.js';
 import { appendHistory } from './history.js';
@@ -181,39 +181,63 @@ async function runOnce(cfg, { notify = true, quiet = false, historyPath = null, 
 
     let events = collectOnly ? [] : evaluateRules(cfg.rules, snapshot, state.lastSnapshot, history);
 
-    // ── 二次确认 ──
-    // 等一会儿重新抓一次，只有两次都命中的才算真报警。
+    // ── 多轮确认 ──
+    // 命中后不立刻发，隔一会儿再抓一次，只有「连续两次都命中」才算真报警。
     // 挡掉 RPC 返回异常值、区块重组、瞬时抖动造成的假警报。
+    //
     // 必须放在抢占发送权之前 —— 否则第一次评估就占了 cooldown，
-    // 最终没发的话这条报警在 cooldown 期内就再也报不出来了。
+    // 最终没发的话这条报警在整个 cooldown 期内都报不出来了。
     const confirmSec = cfg.confirmDelaySeconds ?? 0;
-    const firstFiring = events.filter((e) => e.firing);
-    if (firstFiring.length && confirmSec > 0) {
-      console.log(`[confirm] ${firstFiring.length} 条命中，等 ${confirmSec}s 后复检`);
+    const retrySec = cfg.confirmRetrySeconds ?? 0;
+    const firingKeys = (evs) => new Set(evs.filter((e) => e.firing).map((e) => e.key));
+
+    if (!collectOnly && confirmSec > 0 && events.some((e) => e.firing)) {
+      const k1 = firingKeys(events);
+      console.log(`[confirm] ${k1.size} 条命中，等 ${confirmSec}s 后复检`);
       await new Promise((r) => setTimeout(r, confirmSec * 1000));
+
       let snap2 = null;
-      try {
-        snap2 = await snapshotNow(cfg);
-      } catch (e) {
-        // 复检抓取失败就按第一次的结果发 —— RPC 抖一下不该让真报警被吞掉
-        console.error(`[confirm] 复检抓取失败，按首次结果发送: ${e.message}`);
-      }
+      try { snap2 = await snapshotNow(cfg); }
+      catch (e) { console.error(`[confirm] 复检抓取失败，按首次结果发送: ${e.message}`); }
+
       if (snap2) {
         console.log(`[confirm] 复检完成 block ${snapshot.blockNumber} → ${snap2.blockNumber}`);
-        // prevSnapshot 仍用上一轮的，否则 changePct 类规则会变成「和 20 秒前比」
+        // prevSnapshot 仍用上一轮的，否则 changePct 类规则会变成「和几十秒前比」
         const events2 = evaluateRules(cfg.rules, snap2, state.lastSnapshot, history);
-        const firstKeys = new Set(firstFiring.map((e) => e.key));
+        const k2 = firingKeys(events2);
 
-        const dropped = firstFiring.filter((e) => !events2.find((x) => x.key === e.key && x.firing));
-        for (const e of dropped) console.log(`[confirm] ✗ ${e.key} 复检未命中，判定为抖动，不发送`);
-        const kept = events2.filter((e) => e.firing && firstKeys.has(e.key));
-        for (const e of kept) console.log(`[confirm] ✓ ${e.key} 两次均命中`);
-        // 第二次才出现的先压住，让它下一轮走完整的两次确认
-        const fresh = events2.filter((e) => e.firing && !firstKeys.has(e.key));
-        for (const e of fresh) console.log(`[confirm] ~ ${e.key} 仅复检命中，留待下一轮确认`);
+        let confirmed = confirmedKeys(k1, k2);                            // 第 1、2 次都中
+        for (const k of confirmed) console.log(`[confirm] ✓ ${k} 两次均命中`);
+        for (const k of k1) if (!k2.has(k)) console.log(`[confirm] ✗ ${k} 复检未命中，判定为抖动，不发送`);
 
-        events = events2.map((e) => (e.firing && !firstKeys.has(e.key) ? { ...e, firing: false } : e));
-        snapshot = snap2;   // 落库用更新的那份数据
+        // 只有第二次才出现的：再等一轮单独确认，而不是丢给下一个周期
+        // （下一个周期在 GitHub 上可能是半小时后，太久）
+        const fresh = [...k2].filter((k) => !k1.has(k));
+        let latest = events2;
+        if (fresh.length && retrySec > 0) {
+          console.log(`[confirm] ${fresh.length} 条仅复检命中，再等 ${retrySec}s 跑第三次`);
+          await new Promise((r) => setTimeout(r, retrySec * 1000));
+          let snap3 = null;
+          try { snap3 = await snapshotNow(cfg); }
+          catch (e) { console.error(`[confirm] 第三次抓取失败，这些留待下一轮: ${e.message}`); }
+          if (snap3) {
+            console.log(`[confirm] 第三次完成 block ${snap2.blockNumber} → ${snap3.blockNumber}`);
+            const events3 = evaluateRules(cfg.rules, snap3, state.lastSnapshot, history);
+            const k3 = firingKeys(events3);
+            confirmed = confirmedKeys(k1, k2, k3);
+            for (const k of fresh) {
+              if (k3.has(k)) console.log(`[confirm] ✓ ${k} 第二三次均命中`);
+              else console.log(`[confirm] ✗ ${k} 第三次未命中，判定为抖动`);
+            }
+            latest = events3;
+            snapshot = snap3;
+          }
+        } else {
+          for (const k of fresh) console.log(`[confirm] ~ ${k} 仅复检命中，留待下一轮确认`);
+        }
+
+        if (snapshot !== snap2 && latest === events2) snapshot = snap2;   // 没跑第三次时用第二次的数据
+        events = latest.map((e) => (e.firing && !confirmed.has(e.key) ? { ...e, firing: false } : e));
       }
     }
 
@@ -397,8 +421,10 @@ function printTgConfig(cfg) {
     : '未启用'}`);
   console.log(`每小时上限  : ${t.rateLimit?.maxPerHour > 0
     ? `${t.rateLimit.maxPerHour} 条（${(t.rateLimit.exceptSeverities || ['critical']).join('/')} 穿透）` : '不限'}`);
-  console.log(`二次确认    : ${cfg.confirmDelaySeconds > 0
-    ? `命中后等 ${cfg.confirmDelaySeconds}s 复检，两次都中才发` : '关闭'}`);
+  console.log(`报警确认    : ${cfg.confirmDelaySeconds > 0
+    ? `命中后等 ${cfg.confirmDelaySeconds}s 复检，连续两次命中才发`
+      + (cfg.confirmRetrySeconds > 0 ? `；仅复检命中的再等 ${cfg.confirmRetrySeconds}s 跑第三次` : '')
+    : '关闭'}`);
   console.log(`轮询间隔    : ${cfg.intervalSeconds || 300}s ｜ 默认重复间隔: ${cfg.defaultCooldownMinutes ?? 60} 分钟 ｜ 定时快照: ${cfg.heartbeatHours ? `每 ${cfg.heartbeatHours}h` : '关闭'}`);
 }
 

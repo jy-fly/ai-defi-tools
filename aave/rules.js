@@ -170,3 +170,20 @@ export function evaluateRules(rules, snapshot, prevSnapshot, history = []) {
   }
   return out;
 }
+
+/**
+ * 多轮确认的交集判定：只有「连续两次命中」才算确认。
+ * @param {Set<string>} k1 第一次命中的 key
+ * @param {Set<string>} k2 第二次命中的 key
+ * @param {Set<string>|null} k3 第三次命中的 key（只针对「仅第二次命中」的那些跑）
+ * @returns {Set<string>} 确认通过、该发送的 key
+ */
+export function confirmedKeys(k1, k2, k3 = null) {
+  // 第 1、2 次都中
+  const confirmed = new Set([...k1].filter((k) => k2.has(k)));
+  // 第 2、3 次都中（第一次没中的那些，用第三次来补确认）
+  if (k3) {
+    for (const k of k2) if (!k1.has(k) && k3.has(k)) confirmed.add(k);
+  }
+  return confirmed;
+}
