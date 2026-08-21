@@ -29,7 +29,7 @@ function redact(msg, token) {
 
 function creds(override = {}) {
   return {
-    token: override.token || process.env.TELEGRAM_BOT_TOKEN,
+    token: override.token || process.env.TELEGRAM_BOT_TOKEN || process.env.AAVE_TELEGRAM_BOT_TOKEN,
     chatId: override.chatId || process.env.TELEGRAM_CHAT_ID,
   };
 }

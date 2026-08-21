@@ -1,0 +1,4 @@
+#!/bin/sh
+# Bybit 监控入口。api.bybit.com 国内需要代理，而 Node 的内置 fetch
+# 默认忽略 HTTPS_PROXY，所以这里显式打开。
+exec env NODE_USE_ENV_PROXY=1 node "$(cd "$(dirname "$0")" && pwd)/index.js" "$@"

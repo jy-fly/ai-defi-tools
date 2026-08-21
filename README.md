@@ -4,8 +4,18 @@ DeFi 监控工具集。按协议分目录，推送通道独立成模块，以后
 
 ```
 ai-defi-tools/
-├── tg/                    # 通用 Telegram 推送模块（协议无关，可被任意监控复用）
+├── core/                  # 协议无关的引擎：规则、状态、配置展开、消息渲染
+│   ├── rules.js
+│   ├── state.js
+│   ├── config.js
+│   └── format.js
+├── tg/                    # 通用 Telegram 推送模块
 │   └── index.js
+├── bybit/                 # Bybit 现货价格监控（发到独立的 TG 群）
+│   ├── monitor             # 入口，./bybit/monitor check
+│   ├── market.js           # Bybit V5 公开行情接口
+│   ├── config.json         ← 价格阈值
+│   └── ...
 ├── aave/                  # Aave V3 池子监控
 │   ├── monitor             # 入口脚本（自带代理开关），./aave/monitor check
 │   ├── config.json         ← 阈值配置（你要改的就是这个文件）
@@ -220,6 +230,40 @@ GitHub 对单个 workflow 的定时调度延迟很大 —— 配 `*/5`，实测 
 ```
 
 两个 runner 的采样都能用于窗口对比，数据密度直接翻倍，`⚠采样密度不足` 的降级标注也会少很多。没配 MongoDB 时自动退回本地滑动窗口。
+
+## Bybit 价格监控
+
+监控 Bybit 现货 [USDC/USDT](https://www.bybit.com/en/trade/spot/USDC/USDT)，价格到位时提醒。
+
+```bash
+./bybit/monitor check          # 当前价格 + 阈值对照
+./bybit/monitor once           # 检查一次并报警
+./bybit/monitor watch          # 常驻（默认 60 秒一轮）
+./bybit/monitor snapshot       # 把当前价格发到 TG
+```
+
+配置在 [bybit/config.json](bybit/config.json)：
+
+```json
+"alerts": {
+  "ask1Price": { "op": "<=", "value": 1.001, "severity": "warn" }
+}
+```
+
+**盯的是 `ask1Price`（卖一价）而不是最新成交价** —— 用 USDT 买 USDC 时吃的是卖单，卖一价才是你实际能成交的价格。`lastPrice` 可能是几秒前别人的成交价，参考意义不如卖一。
+
+两档阈值：`<= 1.001` 提醒（warn），`<= 1.0` 是更好的价位（critical，会穿透静默时段和限流）。
+
+推送到独立的群，凭据两级回落 `BYBIT_TELEGRAM_* > TELEGRAM_*`：
+
+```
+BYBIT_TELEGRAM_BOT_TOKEN=     # 留空则复用 AAVE 的 bot
+BYBIT_TELEGRAM_CHAT_ID=       # 新群的 id
+```
+
+同一个 bot 可以同时在两个群里，所以通常只需要填 `CHAT_ID`。拿新群 id：把 bot 拉进群、群里发一条 `/start`，然后 `./bybit/monitor chat-id`。
+
+数据源是 Bybit V5 公开接口，不需要 API key。`api.bybit.com` 国内要走代理，`./bybit/monitor` 已经带上了开关。
 
 ## 国内网络：代理
 

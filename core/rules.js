@@ -16,6 +16,7 @@ const OP_LABEL = {
   crossUp: '上穿', crossDown: '下穿',
 };
 
+// 哪些指标本身就是百分比（格式化时带 %）。各协议用 registerPctMetrics 追加自己的。
 const PCT_METRICS = new Set([
   'supplyAPY', 'supplyAPR', 'borrowAPY', 'borrowAPR', 'utilizationRate',
   'supplyCapUsedPct', 'borrowCapUsedPct', 'ltv', 'liquidationThreshold',
@@ -24,11 +25,29 @@ const PCT_METRICS = new Set([
 
 export function isPercentMetric(m) { return PCT_METRICS.has(m); }
 
+/** 让其他协议注册自己的百分比指标 —— 规则引擎本身是通用的，
+ *  只有「哪些字段是百分比」这件事因协议而异 */
+export function registerPctMetrics(names) {
+  for (const n of names) PCT_METRICS.add(n);
+}
+
+// 需要高精度显示的指标。稳定币价格差异都在小数点后三四位，
+// 默认的两位小数会把 1.0003 显示成 1.00，完全看不出变化
+const PRECISE_METRICS = new Set();
+let PRECISE_DIGITS = 4;
+
+export function registerPreciseMetrics(names, digits = 4) {
+  for (const n of names) PRECISE_METRICS.add(n);
+  PRECISE_DIGITS = digits;
+}
+export function isPreciseMetric(m) { return PRECISE_METRICS.has(m); }
+
 export function fmtNum(metric, v) {
   if (typeof v === 'boolean') return v ? 'true' : 'false';
   if (v === Infinity) return '无上限';
   if (typeof v !== 'number' || Number.isNaN(v)) return String(v);
   if (PCT_METRICS.has(metric)) return `${v.toFixed(2)}%`;
+  if (PRECISE_METRICS.has(metric)) return v.toFixed(PRECISE_DIGITS);
   const abs = Math.abs(v);
   if (metric.endsWith('Usd')) {
     if (abs >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
