@@ -3,7 +3,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { fetchMarkets } from './market.js';
+import { fetchMarkets } from './sources.js';
 import { evaluateRules, confirmedByVotes } from '../core/rules.js';
 import { loadState, saveState } from '../core/state.js';
 import { loadConfig } from './config.js';
@@ -44,7 +44,7 @@ function requireTg() {
   );
 }
 
-const snapshotNow = (cfg) => fetchMarkets(cfg.assets, cfg.depthLevels ?? 5);
+const snapshotNow = (cfg) => fetchMarkets(cfg.assets, cfg.source || 'kraken');
 
 function inQuietHours(q, at = new Date(), fallbackTz = 'Asia/Hong_Kong') {
   if (!q || q.enabled === false || q.start === undefined || q.end === undefined) return false;
@@ -262,6 +262,8 @@ function printTgConfig(cfg) {
     ? `每天 ${String(d.hour ?? 10).padStart(2, '0')}:${String(d.minute ?? 0).padStart(2, '0')} ${d.timezone || t.timezone}` : '关闭'}`);
   console.log(`报警确认    : ${cfg.confirmDelaySeconds > 0
     ? `最多 ${cfg.confirmRetrySeconds > 0 ? 3 : 2} 次抓取，累计命中 ${cfg.confirmMinVotes ?? 2} 次才发` : '关闭'}`);
+  console.log(`数据源      : ${cfg.source || 'kraken'}${(cfg.source || 'kraken') === 'kraken'
+    ? '（Kraken 不封美国 IP，GitHub Actions 上只能用它）' : '（Bybit 封美国 IP，CI 上会 403）'}`);
   console.log(`轮询间隔    : ${cfg.intervalSeconds || 60}s ｜ 默认重复间隔: ${cfg.defaultCooldownMinutes ?? 60} 分钟`);
 }
 

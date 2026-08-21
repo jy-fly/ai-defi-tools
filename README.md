@@ -233,37 +233,38 @@ GitHub 对单个 workflow 的定时调度延迟很大 —— 配 `*/5`，实测 
 
 ## Bybit 价格监控
 
-监控 Bybit 现货 [USDC/USDT](https://www.bybit.com/en/trade/spot/USDC/USDT)，价格到位时提醒。
+盯 USDC/USDT 的卖一价，到 1.0002 / 1.0 时推送到独立的 TG 群。
 
 ```bash
 ./bybit/monitor check          # 当前价格 + 阈值对照
 ./bybit/monitor once           # 检查一次并报警
-./bybit/monitor watch          # 常驻（默认 60 秒一轮）
+./bybit/monitor watch          # 常驻（5 分钟一轮）
 ./bybit/monitor snapshot       # 把当前价格发到 TG
 ```
 
-配置在 [bybit/config.json](bybit/config.json)：
-
-```json
-"alerts": {
-  "ask1Price": { "op": "<=", "value": 1.001, "severity": "warn" }
-}
-```
-
-**盯的是 `ask1Price`（卖一价）而不是最新成交价** —— 用 USDT 买 USDC 时吃的是卖单，卖一价才是你实际能成交的价格。`lastPrice` 可能是几秒前别人的成交价，参考意义不如卖一。
-
-两档阈值：`<= 1.001` 提醒（warn），`<= 1.0` 是更好的价位（critical，会穿透静默时段和限流）。
-
-推送到独立的群，凭据两级回落 `BYBIT_TELEGRAM_* > TELEGRAM_*`：
+消息就一行，通知栏预览不用点开就能看全：
 
 ```
-BYBIT_TELEGRAM_BOT_TOKEN=     # 留空则复用 AAVE 的 bot
-BYBIT_TELEGRAM_CHAT_ID=       # 新群的 id
+🔔 USDC/USDT 卖一 1.0002　买一 1.0001
+到 1.0002 了
 ```
 
-同一个 bot 可以同时在两个群里，所以通常只需要填 `CHAT_ID`。拿新群 id：把 bot 拉进群、群里发一条 `/start`，然后 `./bybit/monitor chat-id`。
+**盯 `ask1Price`（卖一价）而不是最新成交价** —— 用 USDT 买 USDC 时吃的是卖单，卖一价才是实际能成交的价格。`lastPrice` 是别人几秒前的成交价，看着到位了未必买得到。
 
-数据源是 Bybit V5 公开接口，不需要 API key。`api.bybit.com` 国内要走代理，`./bybit/monitor` 已经带上了开关。
+### 数据源：为什么是 Kraken 不是 Bybit
+
+**Bybit 封禁美国 IP**，而 GitHub Actions 的 runner 跑在 Azure 美国节点，直连 `api.bybit.com` 一律返回 403。所以 CI 上只能用 **Kraken**（美国合规交易所，不受影响）。
+
+两家的报价差在 0.0001 量级：
+
+```
+bybit   卖一 1.0003  买一 1.0002
+kraken  卖一 1.0004  买一 1.0003
+```
+
+配置里 `"source": "bybit"` 可以切回去，但那样只能在本地或非美国节点的机器上跑。
+
+⚠️ **手续费的量级远大于这个价差**：Kraken 稳定币对约 0.2%、Bybit 现货 0.1%，而 1.0003 → 1.0002 只有 0.01%。挑价格能省一点，但别指望靠这个价差套利。
 
 ## 国内网络：代理
 

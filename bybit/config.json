@@ -1,5 +1,6 @@
 {
-  "_说明": "监控 Bybit 现货 USDC/USDT 价格。用 USDT 买 USDC 时吃的是卖一价，所以盯 ask1Price",
+  "_说明": "Bybit 现货 USDC/USDT 价格监控。数据源用 Kraken —— Bybit 封美国 IP，GitHub Actions 连不上",
+  "source": "kraken",
   "intervalSeconds": 300,
   "defaultCooldownMinutes": 60,
   "confirmDelaySeconds": 15,

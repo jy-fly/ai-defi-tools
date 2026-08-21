@@ -2,13 +2,14 @@ name: Bybit 价格监控
 
 # 盯 Bybit 现货 USDC/USDT 的卖一价，到 1.0002 / 1.0 时推送到 Bybit 群。
 # 和 Aave 那两个 workflow 完全独立：各自的 state、各自的群。
-# ⚠️ 定时已停用：Bybit 封禁美国 IP，而 GitHub Actions 的 runner 跑在
-# Azure 美国节点，直连 api.bybit.com 会被 403 拒绝。开着只会每 5 分钟
-# 失败一次、刷一堆失败邮件。
-# 要恢复得先解决数据源问题（见 README「Bybit 价格监控」一节）。
+# 数据源用 Kraken —— Bybit 封美国 IP，而 runner 跑在 Azure 美国节点，
+# 直连 api.bybit.com 一律 403。Kraken 是美国合规交易所，不受影响。
+# 两家的 USDC/USDT 报价差在 0.0001 量级。
 on:
-  # schedule:
-  #   - cron: '*/5 * * * *'
+  schedule:
+    # 每 5 分钟。GitHub 实测会降频到 30 分钟左右，
+    # 想要真 5 分钟得跑在自己机器上（./bybit/monitor watch）。
+    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       mode:
