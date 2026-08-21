@@ -251,26 +251,30 @@ GitHub 对单个 workflow 的定时调度延迟很大 —— 配 `*/5`，实测 
 
 **盯 `ask1Price`（卖一价）而不是最新成交价** —— 用 USDT 买 USDC 时吃的是卖单，卖一价才是实际能成交的价格。`lastPrice` 是别人几秒前的成交价，看着到位了未必买得到。
 
-### CI 上怎么连 Bybit
+### 数据源：为什么是 Kraken
 
-**Bybit 封禁美国 IP**，而 GitHub Actions 的 runner 跑在 Azure 美国节点，直连 `api.bybit.com` 一律 403。
+**Bybit 封禁美国 IP**，而 GitHub Actions 的 runner 跑在 Azure 美国节点，直连 `api.bybit.com` 一律 403。试过在 CI 上起 mihomo 走机场订阅绕过去，但为每 5 分钟一次的请求下载 18MB 二进制、往 Secrets 里塞节点凭据、还要扛机场对 CI 出口 IP 的风控 —— 不划算，放弃了。
 
-解决办法是在 runner 上起一个 mihomo（Clash Meta 内核），用机场订阅把流量从非美国出口送出去：
+改用 **Kraken**（美国合规交易所，不封 CI 的 IP），报价靠 `priceOffset` 平移到 Bybit 口径：
 
-1. 下载 mihomo 二进制（约 18MB）
-2. 用 `proxy-provider` 引用订阅，自己掌控端口和出口规则，不受机场配置里的分组影响
-3. 起在 `127.0.0.1:7890`，探测能连通 Bybit 才继续（最多等 40 秒）
-4. 给 Node 设 `HTTPS_PROXY` + `NODE_USE_ENV_PROXY=1`
+```json
+"source": "kraken",
+"priceOffset": -0.0001
+```
 
-需要一个 Secret：**`CLASH_SUBSCRIPTION_URL`**（机场订阅链接）。没配的话代理那步会自动跳过，然后 Bybit 请求就会 403 失败。
+实测 Kraken 卖一稳定比 Bybit 高 0.0001，校准后两边完全吻合。好处是**阈值始终按 Bybit 的价格写**，看配置不用在脑子里做换算。
 
-三个注意事项：
+⚠️ 但 `priceOffset` 是经验值，不是恒等式。它来自平静行情下的连续采样，而两家流动性差 15 倍（Bybit 成交额 $436M vs Kraken $30M），波动时价差会拉开。所以：
 
-- **订阅链接绝不进日志**。这是 public 仓库，Actions 日志谁都能看。配置文件只写不读，没有 `set -x`，GitHub 也会对 secret 做打码 —— 但仍然建议用一个专用订阅，别拿主力账号的。
-- **机场可能封 CI 的 IP**。每 5 分钟一次请求量很小，但 runner 的 IP 每次都变，某些机场的风控会当成异常。
-- **代理起不来就整个失败**，不会静默降级 —— 宁可让 workflow 红着，也别让你以为在监控其实没有。
+- 收到提醒后，**下单前自己去 Bybit 页面确认一眼**
+- 发现偏差变了就改 `priceOffset`，`./bybit/monitor check` 会显示当前校准值
+- 想要零偏差就把 `source` 改回 `"bybit"` —— 本地跑没问题（你的 Clash 已经在转发了），只是 CI 上会 403
 
-不想用代理的话，把 `source` 改成 `kraken` 并配 `priceOffset: -0.0001`（实测 Kraken 卖一稳定比 Bybit 高这么多，平移后两边吻合）。代价是这个偏差只在平静行情下稳定，两家流动性差 15 倍，波动时会拉开。
+本地想用原始报价 + 真 5 分钟精度：
+
+```bash
+./bybit/monitor watch
+```
 
 ## 国内网络：代理
 

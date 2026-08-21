@@ -1,7 +1,9 @@
 name: Bybit 价格监控
 
-# Bybit 封禁美国 IP，而 runner 跑在 Azure 美国节点，直连一律 403。
-# 所以先用机场订阅起一个 mihomo 本地代理，让请求从非美国出口出去。
+# 数据源用 Kraken —— Bybit 封美国 IP，runner 在 Azure 美国节点直连会 403。
+# 试过在 CI 上起 mihomo 走机场订阅，但为每 5 分钟一次的请求下载 18MB 二进制、
+# 传节点凭据、还要扛机场风控，不划算。
+# Kraken 的报价靠 config 里的 priceOffset 平移到 Bybit 口径。
 on:
   schedule:
     # 每 5 分钟。GitHub 实测会降频到 30 分钟左右，
@@ -26,14 +28,11 @@ concurrency:
   group: bybit-monitor
   cancel-in-progress: false
 
-env:
-  MIHOMO_VERSION: v1.19.30
-
 jobs:
   monitor:
     runs-on: ubuntu-latest
     environment: aave-env
-    timeout-minutes: 8
+    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@v7
@@ -45,62 +44,6 @@ jobs:
 
       - name: 安装依赖
         run: npm ci --omit=dev
-
-      # ── 起代理 ──
-      # 订阅链接只经过环境变量和文件，绝不出现在任何输出里。
-      # 这是 public 仓库，Actions 日志谁都能看。
-      - name: 启动 mihomo 代理
-        # step 的 if 不能引用本 step 的 env（求值时还没设），直接判断 secret
-        if: ${{ secrets.CLASH_SUBSCRIPTION_URL != '' }}
-        env:
-          CLASH_SUB: ${{ secrets.CLASH_SUBSCRIPTION_URL }}
-        run: |
-          set -e
-          curl -sSL -o mihomo.gz \
-            "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/mihomo-linux-amd64-v1-${MIHOMO_VERSION}.gz"
-          gunzip mihomo.gz && chmod +x mihomo
-
-          mkdir -p .clash
-          # 用 proxy-provider 引用订阅：自己掌控端口和出口规则，
-          # 不受机场配置里那些花哨的分组影响
-          cat > .clash/config.yaml <<CONF
-          mixed-port: 7890
-          allow-lan: false
-          mode: rule
-          log-level: silent
-          proxy-providers:
-            airport:
-              type: http
-              url: "${CLASH_SUB}"
-              interval: 86400
-              path: ./providers/airport.yaml
-              health-check:
-                enable: true
-                url: http://www.gstatic.com/generate_204
-                interval: 300
-          proxy-groups:
-            - name: PROXY
-              type: url-test
-              use: [airport]
-              url: http://www.gstatic.com/generate_204
-              interval: 300
-              tolerance: 50
-          rules:
-            - MATCH,PROXY
-          CONF
-
-          ./mihomo -d .clash > /dev/null 2>&1 &
-          echo $! > .clash/pid
-
-          # 等代理真的能出网再往下走，最多 40 秒
-          for i in $(seq 1 20); do
-            if curl -s -m 5 -x http://127.0.0.1:7890 -o /dev/null -w '' https://api.bybit.com/v5/market/time; then
-              echo "代理就绪（第 ${i} 次探测）"; exit 0
-            fi
-            sleep 2
-          done
-          echo "::error::代理 40 秒内没能连通 Bybit"
-          exit 1
 
       - name: 准备配置
         run: '[ -f bybit/config.json ] || cp bybit/config.example.json bybit/config.json'
@@ -117,13 +60,9 @@ jobs:
           BYBIT_TELEGRAM_BOT_TOKEN: ${{ secrets.BYBIT_TELEGRAM_BOT_TOKEN }}
           BYBIT_TELEGRAM_CHAT_ID: ${{ secrets.BYBIT_TELEGRAM_CHAT_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.AAVE_TELEGRAM_BOT_TOKEN }}
-          # 有代理就让 Node 的 fetch 走它（Node 默认无视这些变量，要显式开）
-          HTTPS_PROXY: ${{ secrets.CLASH_SUBSCRIPTION_URL != '' && 'http://127.0.0.1:7890' || '' }}
-          HTTP_PROXY: ${{ secrets.CLASH_SUBSCRIPTION_URL != '' && 'http://127.0.0.1:7890' || '' }}
-          NODE_USE_ENV_PROXY: '1'
         run: |
           MODE="${{ inputs.mode || 'once' }}"
-          echo "模式: $MODE ｜ 代理: ${HTTPS_PROXY:-无}"
+          echo "模式: $MODE"
           if [ "$MODE" = "once" ]; then
             node bybit/index.js once --quiet
           else
@@ -136,7 +75,3 @@ jobs:
         with:
           path: bybit/data
           key: bybit-state-${{ github.run_id }}-${{ github.run_attempt }}
-
-      - name: 关掉代理
-        if: always()
-        run: '[ -f .clash/pid ] && kill "$(cat .clash/pid)" 2>/dev/null || true'
