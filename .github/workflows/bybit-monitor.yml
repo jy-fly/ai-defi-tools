@@ -4,11 +4,11 @@ name: Bybit 价格监控
 # 试过在 CI 上起 mihomo 走机场订阅，但为每 5 分钟一次的请求下载 18MB 二进制、
 # 传节点凭据、还要扛机场风控，不划算。
 # Kraken 的报价靠 config 里的 priceOffset 平移到 Bybit 口径。
+# 定时已关闭。取消下面 schedule 的注释即可恢复，
+# 其余配置（阈值、群、校准）都原样留着。
 on:
-  schedule:
-    # 每 5 分钟。GitHub 实测会降频到 30 分钟左右，
-    # 想要真 5 分钟得跑在自己机器上（./bybit/monitor watch）。
-    - cron: '*/5 * * * *'
+  # schedule:
+  #   - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       mode:
